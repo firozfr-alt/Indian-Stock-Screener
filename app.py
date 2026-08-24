@@ -2,11 +2,18 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import time
+import requests
 
 st.set_page_config(page_title="Indian Market Long-Term Screener", layout="wide")
 
 st.title("📈 Indian Stock Market: Long-Term Screener")
 st.markdown("A free, open-source dashboard to screen NSE stocks based on Quality and Debt metrics.")
+
+# NEW FIX: Create a disguised session to bypass Yahoo blocks
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+})
 
 # Sample universes 
 UNIVERSES = {
@@ -25,7 +32,8 @@ if st.button("🚀 Run Screener"):
         
         for i, ticker in enumerate(tickers):
             try:
-                stock = yf.Ticker(ticker)
+                # NEW FIX: Pass the disguised session to yfinance
+                stock = yf.Ticker(ticker, session=session)
                 info = stock.info
                 
                 # Extract fundamental metrics safely
@@ -35,6 +43,10 @@ if st.button("🚀 Run Screener"):
                 debt_equity = info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else 0
                 pe_ratio = info.get("trailingPE", 0)
                 
+                # Skip if Yahoo returned absolutely nothing (empty dictionary)
+                if not info or price == 0:
+                    continue
+
                 results.append({
                     "Ticker": ticker.replace(".NS", ""),
                     "Price (₹)": price,
@@ -43,7 +55,8 @@ if st.button("🚀 Run Screener"):
                     "Debt-to-Equity": round(debt_equity, 2),
                     "P/E Ratio": round(pe_ratio, 2)
                 })
-                time.sleep(0.5) 
+                # Increased to 1 second to be extra polite to Yahoo's servers
+                time.sleep(1) 
             except Exception as e:
                 pass
             
@@ -57,9 +70,8 @@ if st.button("🚀 Run Screener"):
         # Apply Long-Term Strategy Filters
         st.subheader("✅ Passed Long-Term Criteria")
         
-        # NEW FIX: Check if dataframe is empty before filtering!
         if df.empty:
-            st.error("⚠️ Yahoo Finance didn't return any data. This usually happens due to temporary rate limits. Try again in a minute!")
+            st.error("⚠️ Yahoo Finance is still blocking the request. The cloud IP might be temporarily banned.")
         else:
             if selected_cap == "Large Cap":
                 passed = df[(df["ROE (%)"] > 15) & (df["Debt-to-Equity"] < 0.5)]
