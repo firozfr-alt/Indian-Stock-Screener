@@ -1,21 +1,12 @@
 import streamlit as st
-import yfinance as yf
+from yahooquery import Ticker
 import pandas as pd
-import time
-import requests
 
 st.set_page_config(page_title="Indian Market Long-Term Screener", layout="wide")
 
 st.title("📈 Indian Stock Market: Long-Term Screener")
 st.markdown("A free, open-source dashboard to screen NSE stocks based on Quality and Debt metrics.")
 
-# NEW FIX: Create a disguised session to bypass Yahoo blocks
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-})
-
-# Sample universes 
 UNIVERSES = {
     "Large Cap": ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "HUL.NS"],
     "Mid Cap": ["POLYCAB.NS", "TRENT.NS", "DIXON.NS", "IDFCFIRSTB.NS"],
@@ -23,44 +14,43 @@ UNIVERSES = {
 }
 
 selected_cap = st.selectbox("Select Market Cap Universe to Screen", list(UNIVERSES.keys()))
-tickers = UNIVERSES[selected_cap]
+tickers_list = UNIVERSES[selected_cap]
 
 if st.button("🚀 Run Screener"):
-    with st.spinner("Fetching live fundamental data from Yahoo Finance..."):
-        results = []
-        progress_bar = st.progress(0)
+    with st.spinner("Bypassing cloud blocks using Yahoo backend API..."):
         
-        for i, ticker in enumerate(tickers):
+        # yahooquery fetches all tickers instantly in one batch
+        tickers = Ticker(tickers_list)
+        
+        # Pull backend dictionaries
+        fin_data = tickers.financial_data
+        summary_data = tickers.summary_detail
+        
+        results = []
+        for symbol in tickers_list:
             try:
-                # NEW FIX: Pass the disguised session to yfinance
-                stock = yf.Ticker(ticker, session=session)
-                info = stock.info
-                
-                # Extract fundamental metrics safely
-                price = info.get("currentPrice", 0)
-                market_cap = info.get("marketCap", 0) / 10000000 
-                roe = info.get("returnOnEquity", 0) * 100 if info.get("returnOnEquity") else 0
-                debt_equity = info.get("debtToEquity", 0) / 100 if info.get("debtToEquity") else 0
-                pe_ratio = info.get("trailingPE", 0)
-                
-                # Skip if Yahoo returned absolutely nothing (empty dictionary)
-                if not info or price == 0:
-                    continue
-
-                results.append({
-                    "Ticker": ticker.replace(".NS", ""),
-                    "Price (₹)": price,
-                    "Market Cap (Cr)": round(market_cap, 2),
-                    "ROE (%)": round(roe, 2),
-                    "Debt-to-Equity": round(debt_equity, 2),
-                    "P/E Ratio": round(pe_ratio, 2)
-                })
-                # Increased to 1 second to be extra polite to Yahoo's servers
-                time.sleep(1) 
+                # Check if Yahoo successfully returned data for this symbol
+                if isinstance(fin_data, dict) and symbol in fin_data and isinstance(fin_data[symbol], dict):
+                    f_data = fin_data[symbol]
+                    s_data = summary_data.get(symbol, {})
+                    
+                    # Extract metrics safely from the API dictionaries
+                    price = s_data.get("regularMarketPrice", 0) or s_data.get("previousClose", 0)
+                    market_cap = s_data.get("marketCap", 0) / 10000000
+                    roe = (f_data.get("returnOnEquity", 0) or 0) * 100
+                    debt_equity = (f_data.get("debtToEquity", 0) or 0) / 100
+                    pe_ratio = s_data.get("trailingPE", 0) or 0
+                    
+                    results.append({
+                        "Ticker": symbol.replace(".NS", ""),
+                        "Price (₹)": round(price, 2),
+                        "Market Cap (Cr)": round(market_cap, 2),
+                        "ROE (%)": round(roe, 2),
+                        "Debt-to-Equity": round(debt_equity, 2),
+                        "P/E Ratio": round(pe_ratio, 2)
+                    })
             except Exception as e:
                 pass
-            
-            progress_bar.progress((i + 1) / len(tickers))
                 
         df = pd.DataFrame(results)
         
@@ -71,7 +61,7 @@ if st.button("🚀 Run Screener"):
         st.subheader("✅ Passed Long-Term Criteria")
         
         if df.empty:
-            st.error("⚠️ Yahoo Finance is still blocking the request. The cloud IP might be temporarily banned.")
+            st.error("⚠️ Failed to fetch data. Ensure ticker symbols are correct.")
         else:
             if selected_cap == "Large Cap":
                 passed = df[(df["ROE (%)"] > 15) & (df["Debt-to-Equity"] < 0.5)]
@@ -88,5 +78,5 @@ if st.button("🚀 Run Screener"):
                 st.dataframe(passed)
             else:
                 st.warning("No stocks passed the criteria in this run.")
-            
+                
 st.caption("*Disclaimer: This tool is for educational research and does not constitute financial advice.*")
