@@ -1,68 +1,104 @@
 import streamlit as st
-from yahooquery import Ticker
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import time
 
 st.set_page_config(page_title="Indian Market Long-Term Screener", layout="wide")
 
 st.title("📈 Indian Stock Market: Long-Term Screener")
-st.markdown("A free, open-source dashboard to screen NSE stocks based on Quality and Debt metrics.")
+st.markdown("A free, open-source dashboard extracting live data directly from **Screener.in**")
 
+# Screener.in uses standard NSE symbols (No .NS required)
 UNIVERSES = {
-    "Large Cap": ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "HUL.NS"],
-    "Mid Cap": ["POLYCAB.NS", "TRENT.NS", "DIXON.NS", "IDFCFIRSTB.NS"],
-    "Small & Micro Cap": ["SUZLON.NS", "IREDA.NS", "RVNL.NS", "RENUKA.NS", "YESBANK.NS"]
+    "Large Cap": ["RELIANCE", "TCS", "HDFCBANK", "INFY", "HUL"],
+    "Mid Cap": ["POLYCAB", "TRENT", "DIXON", "IDFCFIRSTB"],
+    "Small & Micro Cap": ["SUZLON", "IREDA", "RVNL", "RENUKA", "YESBANK"]
 }
 
 selected_cap = st.selectbox("Select Market Cap Universe to Screen", list(UNIVERSES.keys()))
-tickers_list = UNIVERSES[selected_cap]
+tickers = UNIVERSES[selected_cap]
+
+# Cache the data for 1 hour so you don't scrape the same stock multiple times
+@st.cache_data(ttl=3600) 
+def fetch_screener_data(symbol):
+    url = f"https://www.screener.in/company/{symbol}/consolidated/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+    
+    response = requests.get(url, headers=headers, timeout=10)
+    
+    # Fallback to standalone if the company doesn't have a consolidated page
+    if response.status_code == 404:
+        url = f"https://www.screener.in/company/{symbol}/"
+        response = requests.get(url, headers=headers, timeout=10)
+        
+    if response.status_code != 200:
+        return None
+        
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    metrics = {
+        "Ticker": symbol,
+        "Price (₹)": 0,
+        "Market Cap (Cr)": 0,
+        "ROE (%)": 0,
+        "Debt-to-Equity": 0,
+        "P/E Ratio": 0
+    }
+    
+    # Helper function to find specific numbers on the Screener page
+    def get_value(search_term):
+        try:
+            spans = soup.find_all('span', class_='name')
+            for span in spans:
+                if search_term.lower() in span.text.lower():
+                    parent = span.find_parent('li')
+                    if parent:
+                        number_span = parent.find('span', class_='number')
+                        if number_span:
+                            return float(number_span.text.replace(',', ''))
+        except:
+            pass
+        return 0
+
+    # Extract precise Indian market metrics
+    metrics["Price (₹)"] = get_value("Current Price")
+    metrics["Market Cap (Cr)"] = get_value("Market Cap")
+    metrics["ROE (%)"] = get_value("ROE")
+    metrics["Debt-to-Equity"] = get_value("Debt to equity")
+    metrics["P/E Ratio"] = get_value("Stock P/E")
+    
+    return metrics
 
 if st.button("🚀 Run Screener"):
-    with st.spinner("Bypassing cloud blocks using Yahoo backend API..."):
-        
-        # yahooquery fetches all tickers instantly in one batch
-        tickers = Ticker(tickers_list)
-        
-        # Pull backend dictionaries
-        fin_data = tickers.financial_data
-        summary_data = tickers.summary_detail
-        
+    with st.spinner("Fetching data directly from Screener.in..."):
         results = []
-        for symbol in tickers_list:
-            try:
-                # Check if Yahoo successfully returned data for this symbol
-                if isinstance(fin_data, dict) and symbol in fin_data and isinstance(fin_data[symbol], dict):
-                    f_data = fin_data[symbol]
-                    s_data = summary_data.get(symbol, {})
-                    
-                    # Extract metrics safely from the API dictionaries
-                    price = s_data.get("regularMarketPrice", 0) or s_data.get("previousClose", 0)
-                    market_cap = s_data.get("marketCap", 0) / 10000000
-                    roe = (f_data.get("returnOnEquity", 0) or 0) * 100
-                    debt_equity = (f_data.get("debtToEquity", 0) or 0) / 100
-                    pe_ratio = s_data.get("trailingPE", 0) or 0
-                    
-                    results.append({
-                        "Ticker": symbol.replace(".NS", ""),
-                        "Price (₹)": round(price, 2),
-                        "Market Cap (Cr)": round(market_cap, 2),
-                        "ROE (%)": round(roe, 2),
-                        "Debt-to-Equity": round(debt_equity, 2),
-                        "P/E Ratio": round(pe_ratio, 2)
-                    })
-            except Exception as e:
-                pass
+        progress_bar = st.progress(0)
+        
+        for i, ticker in enumerate(tickers):
+            data = fetch_screener_data(ticker)
+            
+            # Check if we successfully pulled market cap to verify data
+            if data and data["Market Cap (Cr)"] > 0:
+                results.append(data)
+            
+            # Wait 1 second between stocks so Screener.in doesn't block us
+            time.sleep(1) 
+            progress_bar.progress((i + 1) / len(tickers))
                 
         df = pd.DataFrame(results)
         
         st.subheader(f"Raw Data: {selected_cap}")
         st.dataframe(df)
         
-        # Apply Long-Term Strategy Filters
         st.subheader("✅ Passed Long-Term Criteria")
         
         if df.empty:
-            st.error("⚠️ Failed to fetch data. Ensure ticker symbols are correct.")
+            st.error("⚠️ Failed to fetch data. Screener.in might be temporarily unavailable.")
         else:
+            # Apply Long-Term Strategy Filters
             if selected_cap == "Large Cap":
                 passed = df[(df["ROE (%)"] > 15) & (df["Debt-to-Equity"] < 0.5)]
                 st.info("Rule: ROE > 15% and Debt-to-Equity < 0.5")
