@@ -3,153 +3,136 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import google.generativeai as genai
-from datetime import datetime
+import time
 
-st.set_page_config(page_title="Self-Improving AI Long-Term Screener", layout="wide")
-st.title("🧠 Long-Term Quality Compounder & AI Committee Screener")
+st.set_page_config(page_title="AI 10-Pillar Long-Term Screener", layout="wide")
+st.title("🏛️ Long-Term Quality Compounder Screener (25-Stock Pipeline)")
 
 # =========================================================
-# INITIALIZE GEMINI API (UPDATED MODEL ENDPOINT)
+# INITIALIZE GEMINI API (UPDATED TO 2.5 FLASH)
 # =========================================================
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Updated to the current stable free-tier model identifier
     ai_model = genai.GenerativeModel('gemini-2.5-flash')
-    st.sidebar.success("✅ AI Core Active (Gemini Flash)")
+    st.sidebar.success("✅ AI Core Active (Gemini 2.5 Flash)")
 else:
     ai_model = None
     st.sidebar.error("🚨 Missing GEMINI_API_KEY in Streamlit Secrets")
 
-# Top Performing Sectors & 4 Long-Term Compounders Each
-UNIVERSE = {
-    "Financial Services & Banking": ["HDFCBANK.NS", "ICICIBANK.NS", "AXISBANK.NS", "BAJFINANCE.NS"],
-    "Information Technology": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "LTIM.NS"],
-    "Automotive & Manufacturing": ["TATAMOTORS.NS", "M&M.NS", "MARUTI.NS", "BAJAJ-AUTO.NS"],
-    "Pharma & Healthcare": ["SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS"]
+# =========================================================
+# INDIAN MARKET SECTOR UNIVERSE (BROAD LIST)
+# =========================================================
+SECTOR_MAP = {
+    "^NSEBANK": {"name": "Banking", "stocks": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS", "INDUSINDBK.NS", "FEDERALBNK.NS", "IDFCFIRSTB.NS"]},
+    "^CNXIT": {"name": "Information Tech", "stocks": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS", "PERSISTENT.NS", "COFORGE.NS"]},
+    "^CNXAUTO": {"name": "Automotive", "stocks": ["M&M.NS", "TATAMOTORS.NS", "MARUTI.NS", "BAJAJ-AUTO.NS", "EICHERMOT.NS", "HEROMOTOCO.NS", "TVSMOTOR.NS", "ASHOKLEY.NS"]},
+    "^CNXPHARMA": {"name": "Pharma & Healthcare", "stocks": ["SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "LUPIN.NS", "TORNTPHARM.NS", "ZYDUSLIFE.NS", "ALKEM.NS"]},
+    "^CNXFMCG": {"name": "FMCG / Consumer", "stocks": ["ITC.NS", "HUL.NS", "NESTLEIND.NS", "BRITANNIA.NS", "TATACONSUM.NS", "VBL.NS", "GODREJCP.NS", "DABUR.NS", "MARICO.NS"]},
+    "^CNXMETAL": {"name": "Metals & Mining", "stocks": ["TATASTEEL.NS", "HINDALCO.NS", "JSWSTEEL.NS", "VEDL.NS", "COALINDIA.NS", "JINDALSTEL.NS", "NMDC.NS"]},
+    "^CNXREALTY": {"name": "Real Estate", "stocks": ["DLF.NS", "GODREJPROP.NS", "LODHA.NS", "OBEROIRLTY.NS", "PHOENIXLTD.NS", "PRESTIGE.NS"]},
+    "^CNXENERGY": {"name": "Energy & Power", "stocks": ["RELIANCE.NS", "NTPC.NS", "ONGC.NS", "POWERGRID.NS", "BPCL.NS", "IOC.NS", "TATAPOWER.NS"]},
+    "^CNXINFRA": {"name": "Infrastructure", "stocks": ["LT.NS", "GMRINFRA.NS", "IRCTC.NS", "CONCOR.NS", "SIEMENS.NS", "ABB.NS"]}
 }
 
 # =========================================================
-# AGENT 1: MARKET REGIME & DYNAMICS AGENT
+# AGENT 1 & 2: DYNAMIC SECTOR & STOCK MOMENTUM SCANNER
 # =========================================================
-def analyze_market_regime():
-    try:
-        nifty = yf.Ticker("^NSEI").history(period="6mo")
-        vix = yf.Ticker("^INDIAVIX").history(period="1mo")
+@st.cache_data(ttl=3600)
+def get_momentum_rankings(lookback="3mo"):
+    """Finds the Top 5 Sectors, then the Top 5 Stocks in each sector."""
+    # 1. Rank Sectors
+    indices = list(SECTOR_MAP.keys())
+    hist = yf.download(indices, period=lookback, progress=False)['Close']
+    
+    if hist.empty:
+        return {}
         
-        current_nifty = nifty['Close'].iloc[-1]
-        sma_50 = nifty['Close'].rolling(50).mean().iloc[-1]
-        sma_200 = nifty['Close'].rolling(min(200, len(nifty))).mean().iloc[-1]
-        current_vix = vix['Close'].iloc[-1] if not vix.empty else 14.0
+    sector_returns = ((hist.iloc[-1] - hist.iloc[0]) / hist.iloc[0]) * 100
+    top5_indices = sector_returns.nlargest(5).index.tolist()
+    
+    top5_structure = {}
+    
+    # 2. Rank Stocks inside those Top 5 Sectors
+    for idx in top5_indices:
+        sec_name = SECTOR_MAP[idx]["name"]
+        stocks = SECTOR_MAP[idx]["stocks"]
         
-        if current_nifty > sma_50 > sma_200:
-            trend = "Strong Bullish"
-        elif current_nifty < sma_50 < sma_200:
-            trend = "Bearish / Correction"
-        else:
-            trend = "Consolidation / Mixed"
+        stock_hist = yf.download(stocks, period=lookback, progress=False)['Close']
+        if not stock_hist.empty:
+            stock_returns = ((stock_hist.iloc[-1] - stock_hist.iloc[0]) / stock_hist.iloc[0]) * 100
+            # Get Top 5 stocks per sector
+            best_5_stocks = stock_returns.nlargest(5).index.tolist()
+            top5_structure[sec_name] = best_5_stocks
             
-        if current_vix > 18.0:
-            vol_state = "High Risk / Volatile"
-        elif current_vix < 13.0:
-            vol_state = "Complacent / Low Volatility"
-        else:
-            vol_state = "Normal / Balanced"
-            
-        return {
-            "Nifty_Price": round(current_nifty, 2),
-            "SMA_50": round(sma_50, 2),
-            "India_VIX": round(current_vix, 2),
-            "Trend": trend,
-            "Volatility_State": vol_state
-        }
-    except Exception:
-        return {
-            "Nifty_Price": 0, "SMA_50": 0, "India_VIX": 15.0,
-            "Trend": "Neutral", "Volatility_State": "Normal"
-        }
+    return top5_structure
 
 # =========================================================
-# AGENT 2: SELF-TUNING META AGENT
+# AGENT 3: 10-PILLAR FUNDAMENTAL EXTRACTOR (YFINANCE)
 # =========================================================
-def generate_adaptive_strategy(regime):
-    if not ai_model:
-        return "Standard long-term quality criteria applied."
-        
-    prompt = f"""
-    You are the Chief Investment Strategist for a long-term equity portfolio focused on Indian compounders.
-    Current Market Dynamics:
-    - Nifty Trend: {regime['Trend']} (Nifty at {regime['Nifty_Price']}, 50-DMA at {regime['SMA_50']})
-    - India VIX: {regime['India_VIX']} ({regime['Volatility_State']})
-
-    Task:
-    Provide 3 concise operational bullet points instructing how strict we should be regarding valuation (P/E multiples) and margin of safety given this exact macroeconomic environment.
-    """
-    try:
-        response = ai_model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Fallback criteria active: Focus on pristine balance sheets and ROCE > 15%."
-
-# =========================================================
-# AGENT 3: QUANTITATIVE FUNDAMENTAL AGENT
-# =========================================================
-@st.cache_data(ttl=1800)
-def process_long_term_stock(ticker):
+def extract_fundamentals(ticker, sector_name):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        hist = stock.history(period="1y")
-        if hist.empty: return None
         
-        current_price = hist['Close'].iloc[-1]
-        
-        # Fundamental metrics extraction
+        # Core Metrics
         pe = info.get('trailingPE', np.nan)
         roe = info.get('returnOnEquity', np.nan)
-        roce = info.get('returnOnCapitalEmployed', np.nan)
         debt_to_equity = info.get('debtToEquity', np.nan)
+        op_margin = info.get('operatingMargins', np.nan)
+        current_ratio = info.get('currentRatio', np.nan)
+        div_yield = info.get('dividendYield', np.nan)
         
-        roe_pct = round(roe * 100, 2) if pd.notnull(roe) else "N/A"
-        roce_pct = round(roce * 100, 2) if pd.notnull(roce) else "N/A"
-        de_ratio = round(debt_to_equity / 100, 2) if pd.notnull(debt_to_equity) else "N/A"
+        # Format metrics safely
+        roe_pct = round(roe * 100, 2) if pd.notnull(roe) else 0.0
+        de_ratio = round(debt_to_equity / 100, 2) if pd.notnull(debt_to_equity) else 0.0
+        opm_pct = round(op_margin * 100, 2) if pd.notnull(op_margin) else 0.0
+        
+        # Execute 10-Pillar Rule Scoring (0 to 10 points)
+        score = 0
+        checks = []
+        
+        if roe_pct >= 15: score += 2; checks.append("ROE > 15%")
+        if de_ratio <= 0.5: score += 2; checks.append("Debt/Equity < 0.5")
+        elif de_ratio <= 1.0: score += 1; checks.append("Debt/Equity < 1.0")
+        if opm_pct >= 10: score += 2; checks.append("Operating Margin > 10%")
+        if pd.notnull(current_ratio) and current_ratio >= 1.5: score += 1; checks.append("Current Ratio > 1.5")
+        if pd.notnull(pe) and 0 < pe <= 40: score += 1; checks.append("Reasonable P/E (<40)")
+        if pd.notnull(div_yield) and div_yield > 0.01: score += 1; checks.append("Pays Dividends")
         
         return {
             "Symbol": ticker.replace(".NS", ""),
-            "Sector": "",
-            "Price (₹)": round(current_price, 2),
+            "Sector": sector_name,
             "P/E Ratio": round(pe, 2) if pd.notnull(pe) else "N/A",
             "ROE (%)": roe_pct,
-            "ROCE (%)": roce_pct,
-            "Debt/Equity": de_ratio
+            "Debt/Equity": de_ratio,
+            "Oper. Margin (%)": opm_pct,
+            "Score (/10)": score,
+            "Strengths": ", ".join(checks)
         }
     except Exception:
         return None
 
 # =========================================================
-# AGENT 4: STRATEGIC CRITIC & ADVERSARY COMMITTEE
+# AGENT 4: AI LONG-TERM COMMITTEE
 # =========================================================
-def run_long_term_critique(stock_data, strategy_directive):
+def run_long_term_critique(stock_data):
     if not ai_model:
         return "AI Critic offline."
         
     prompt = f"""
-    You are an elite Long-Term Value Investing Committee analyzing {stock_data['Symbol']}.
-    
-    Macro Strategy Directive:
-    {strategy_directive}
+    You are an elite Indian Stock Market Long-Term Value Investing Committee analyzing {stock_data['Symbol']} (Sector: {stock_data['Sector']}).
     
     Company Financial Metrics:
-    - Current Price: ₹{stock_data['Price (₹)']}
     - P/E Ratio: {stock_data['P/E Ratio']}
     - ROE: {stock_data['ROE (%)']}%
-    - ROCE: {stock_data['ROCE (%)']}%
     - Debt-to-Equity: {stock_data['Debt/Equity']}
+    - Operating Margin: {stock_data['Oper. Margin (%)']}%
     
-    Evaluate this stock against core long-term investment pillars (Business Moat, Return Efficiency, Solvency/Balance Sheet Strength, and Valuation Margin of Safety).
-    Provide your evaluation in 3 structured sections:
-    1. **Business Quality & Moat Assessment**
-    2. **Balance Sheet & Return Efficiency Risks**
-    3. **Final Long-Term Verdict** (STRONG LONG-TERM COMPOUNDER, ACCUMULATE ON DIPS, or AVOID) with a justification.
+    Evaluate this stock against strict long-term investment pillars:
+    1. **Business Quality & Pricing Power**
+    2. **Balance Sheet Strength & ROE Quality** (Is the ROE driven by debt or pure margins?)
+    3. **Valuation & Margin of Safety** (Does the P/E justify long-term holding?)
+    4. **Final Verdict**: STRONG BUY, HOLD/ACCUMULATE, or AVOID. Provide a 1-sentence justification.
     """
     try:
         response = ai_model.generate_content(prompt)
@@ -160,38 +143,46 @@ def run_long_term_critique(stock_data, strategy_directive):
 # =========================================================
 # DASHBOARD INTERFACE
 # =========================================================
-st.subheader("🌐 Market Regime & Volatility Assessment")
-regime_data = analyze_market_regime()
+lookback_period = st.sidebar.selectbox("Momentum Scan Period", ["1mo", "3mo", "6mo"], index=1)
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Nifty 50", f"₹{regime_data['Nifty_Price']:,}")
-col2.metric("Market Trend", regime_data['Trend'])
-col3.metric("India VIX", regime_data['India_VIX'])
-col4.metric("Volatility State", regime_data['Volatility_State'])
+if st.button(f"🚀 Run Automated 25-Stock Long-Term Pipeline ({lookback_period})"):
+    
+    # 1. SCAN FOR TOP SECTORS AND STOCKS
+    with st.spinner("Agent 1 & 2: Scanning National Stock Exchange for Top 5 Sectors & 25 Stocks..."):
+        top5_structure = get_momentum_rankings(lookback=lookback_period)
+        
+    if not top5_structure:
+        st.error("Failed to retrieve market data from Yahoo Finance. Try again in a moment.")
+    else:
+        st.success(f"🎯 Successfully identified Top 5 Sectors: {', '.join(top5_structure.keys())}")
+        
+        # 2. EXTRACT FUNDAMENTALS
+        with st.spinner("Agent 3: Extracting Deep Fundamentals (ROE, Debt, Margins) for all 25 stocks..."):
+            all_records = []
+            for sector, stocks in top5_structure.items():
+                for ticker in stocks:
+                    data = extract_fundamentals(ticker, sector)
+                    if data:
+                        all_records.append(data)
+                    time.sleep(0.5) # Prevent Yahoo Finance rate limits
+            
+            df_fundamentals = pd.DataFrame(all_records)
+            
+            # Sort by our 10-Pillar Rule Score
+            df_fundamentals = df_fundamentals.sort_values(by="Score (/10)", ascending=False).reset_index(drop=True)
+            
+        st.subheader("📊 Fundamental Screener: The 25 Best Performing Stocks")
+        st.dataframe(df_fundamentals, use_container_width=True)
 
-with st.expander("⚡ Self-Tuned Long-Term Valuation & Safety Guidelines", expanded=True):
-    with st.spinner("Calibrating macro strategy..."):
-        active_directive = generate_adaptive_strategy(regime_data)
-        st.markdown(active_directive)
-
-if st.button("🚀 Run Top 4 Sectors & 16 Compounders Long-Term Analysis"):
-    with st.spinner("Gathering structural fundamentals across the 4 core sectors..."):
-        all_records = []
-        for sector_name, tickers in UNIVERSE.items():
-            for t in tickers:
-                data = process_long_term_stock(t)
-                if data:
-                    data["Sector"] = sector_name
-                    all_records.append(data)
-                    
-        df_longterm = pd.DataFrame(all_records)
-
-    st.subheader("📊 Fundamental Screener: Top Sectors & Stocks")
-    st.dataframe(df_longterm, use_container_width=True)
-
-    st.subheader("🏛️ AI Long-Term Committee Deep-Dive Reviews")
-    with st.spinner("AI agents reviewing fundamental moats and valuations..."):
-        for _, candidate in df_longterm.iterrows():
-            critique = run_long_term_critique(candidate, active_directive)
-            with st.expander(f"📌 {candidate['Symbol']} ({candidate['Sector']}) — P/E: {candidate['P/E Ratio']} | ROE: {candidate['ROE (%)']}%", expanded=False):
-                st.markdown(critique)
+        # 3. AI COMMITTEE REVIEW FOR THE TOP SCORING STOCKS
+        st.subheader("🏛️ Agent 4: AI Committee Deep-Dive (Top 5 Fundamentally Strongest Stocks)")
+        st.info("The AI is writing a detailed thesis on the 5 stocks that scored highest on your Long-Term Checklist.")
+        
+        with st.spinner("AI agents reviewing fundamental moats and valuations..."):
+            # Only run AI on the Top 5 absolute best stocks to keep the app fast
+            top_5_fundamental_stocks = df_fundamentals.head(5).to_dict('records')
+            
+            for candidate in top_5_fundamental_stocks:
+                critique = run_long_term_critique(candidate)
+                with st.expander(f"📌 {candidate['Symbol']} ({candidate['Sector']}) — Score: {candidate['Score (/10)']}/10 | P/E: {candidate['P/E Ratio']} | ROE: {candidate['ROE (%)']}%", expanded=False):
+                    st.markdown(critique)
