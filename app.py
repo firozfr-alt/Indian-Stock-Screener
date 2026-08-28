@@ -25,9 +25,16 @@ SECTOR_MAP = {
 @st.cache_data(ttl=3600)
 def fetch_screener_deep_fundamentals(symbol):
     url = f"https://www.screener.in/company/{symbol}/consolidated/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
-    # --- BUG FIX: Added a safety net for connection drops ---
+    # 🚨 ADVANCED DISGUISE: Makes the server look exactly like a real Chrome browser
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+    
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 404:
@@ -35,11 +42,9 @@ def fetch_screener_deep_fundamentals(symbol):
             response = requests.get(url, headers=headers, timeout=10)
             
         if response.status_code != 200:
-            return None
+            return None # Blocked by Cloudflare
     except Exception as e:
-        # If Screener.in drops the connection, gracefully fail and skip the stock
-        return None
-    # ---------------------------------------------------------
+        return None # Connection dropped
 
     soup = BeautifulSoup(response.text, 'html.parser')
     
@@ -166,7 +171,7 @@ if st.button("🚀 Run 3-Agent 10-Pillar Pipeline"):
         sec_name = sec_info["name"]
         raw_stocks = sec_info["stocks"]
         
-        with st.spinner(f"Agent 2 & 3: Processing {sec_name}..."):
+        with st.spinner(f"Agent 2 & 3: Processing Fundamentals for {sec_name}..."):
             yf_symbols = [s + ".NS" for s in raw_stocks]
             stock_hist = yf.download(yf_symbols, period=lookback, progress=False)['Close']
             stock_returns = ((stock_hist.iloc[-1] - stock_hist.iloc[0]) / stock_hist.iloc[0]) * 100
@@ -174,11 +179,19 @@ if st.button("🚀 Run 3-Agent 10-Pillar Pipeline"):
             top4_stocks = [s.replace(".NS", "") for s in stock_returns.nlargest(4).index.tolist()]
             
             sector_fund_data = []
+            blocked_stocks = [] # 🚨 New tracking for blocked stocks
+            
             for ticker in top4_stocks:
                 fund_data = fetch_screener_deep_fundamentals(ticker)
                 if fund_data:
                     sector_fund_data.append(fund_data)
-                time.sleep(1) # Protect against blocks
+                else:
+                    blocked_stocks.append(ticker)
+                time.sleep(2) # Increased pause to 2 seconds to avoid Rate Limits
+                
+            # 🚨 TELL THE USER IF STOCKS WERE BLOCKED
+            if blocked_stocks:
+                st.warning(f"⚠️ Screener.in blocked data retrieval for: {', '.join(blocked_stocks)}")
                 
             if sector_fund_data:
                 df_sec = pd.DataFrame(sector_fund_data)
@@ -190,5 +203,7 @@ if st.button("🚀 Run 3-Agent 10-Pillar Pipeline"):
         
     if all_results:
         pdf_bytes = generate_pdf(all_results)
-        st.success("✅ Complete 16-Stock 10-Pillar Analysis Complete!")
-        st.download_button(label="📄 Download 16-Stock PDF Report", data=pdf_bytes, file_name="Screener_Report.pdf", mime="application/pdf")
+        st.success("✅ Analysis Complete!")
+        st.download_button(label="📄 Download PDF Report", data=pdf_bytes, file_name="Screener_Report.pdf", mime="application/pdf")
+    else:
+        st.error("🚨 CRITICAL ERROR: Screener.in's Cloudflare security blocked every single request from the Streamlit Cloud Server. No data could be fetched.")
