@@ -9,12 +9,15 @@ st.set_page_config(page_title="AI 10-Pillar Long-Term Screener", layout="wide")
 st.title("🏛️ Long-Term Quality Compounder Screener (25-Stock Pipeline)")
 
 # =========================================================
-# INITIALIZE GEMINI API (UPDATED TO 2.5 FLASH)
+# INITIALIZE GEMINI API
 # =========================================================
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    ai_model = genai.GenerativeModel('gemini-2.5-flash')
-    st.sidebar.success("✅ AI Core Active (Gemini 2.5 Flash)")
+    try:
+        ai_model = genai.GenerativeModel('gemini-3.6-flash')
+    except Exception:
+        ai_model = genai.GenerativeModel('gemini-2.0-flash')
+    st.sidebar.success("✅ AI Core Active (Gemini Flash)")
 else:
     ai_model = None
     st.sidebar.error("🚨 Missing GEMINI_API_KEY in Streamlit Secrets")
