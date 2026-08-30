@@ -329,14 +329,29 @@ def build_pdf_report(candidate_list, dossier_dict):
         sym = c['Symbol']
         pdf.set_font("helvetica", "B", 11)
         pdf.set_text_color(20, 35, 60)
-        pdf.cell(0, 6, f"Dossier: {sym} ({c['Theme']})", ln=True)
+        
+        # Force cursor to left margin
+        pdf.set_x(10) 
+        pdf.cell(0, 6, f"Dossier: {sym} ({c['Theme']})", ln=1)
         
         pdf.set_font("helvetica", "", 8)
         stats_line1 = f"Current Price: INR {c['Price (₹)']} | 3Y Target (5x): INR {c['Target 5x Price (₹)']} | MCap: INR {c['Market Cap (Cr)']:,} Cr | Target MCap: INR {c['Target 5x Cap (Cr)']:,} Cr"
         stats_line2 = f"P/E: {c['P/E']} | ROE: {c['ROE (%)']}% | OPM: {c['OPM (%)']}% | D/E: {c['Debt/Equity']} | Cash Conv: {c['Cash Conv (OCF/PAT)']} | Req 3Y PAT CAGR: {c['Req PAT CAGR (Twin Engine)']}"
-        pdf.multi_cell(0, 4, stats_line1)
-        pdf.multi_cell(0, 4, stats_line2)
+        
+        # Explicitly set width to 190 and reset X before every multi_cell
+        pdf.set_x(10)
+        pdf.multi_cell(190, 4, stats_line1)
+        pdf.set_x(10)
+        pdf.multi_cell(190, 4, stats_line2)
         pdf.ln(2)
+
+        if sym in dossier_dict:
+            pdf.set_font("helvetica", "I", 7.5)
+            # Clean non-latin characters for standard FPDF
+            clean_text = dossier_dict[sym].encode('latin-1', 'replace').decode('latin-1')
+            pdf.set_x(10)
+            pdf.multi_cell(190, 3.8, clean_text)
+        pdf.ln(4)
 
         if sym in dossier_dict:
             pdf.set_font("helvetica", "I", 7.5)
