@@ -23,8 +23,7 @@ ai_client = None
 if "GEMINI_API_KEY" in st.secrets:
     try:
         ai_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-        ai_model_name = "gemini-2.5-flash"
-        st.sidebar.success("✅ AI Research Core: Online (Gemini Flash)")
+        st.sidebar.success("✅ AI Research Core: Online (Auto-Fallback Mode)")
     except Exception as e:
         st.sidebar.warning(f"⚠️ AI Client Warning: {e}. Deterministic engine active.")
 else:
@@ -49,15 +48,15 @@ def analyze_candidate_fundamentals(ticker, sector_theme):
     try:
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
+        
+        # Drop NaN values and ensure we have enough data
         if hist.empty or len(hist) < 40:
             return None
-            
-        # FIX: Drop NaN values so we only get real prices
         close = hist['Close'].dropna() 
         if close.empty:
             return None
             
-        # FIX: Explicitly round the current price to 2 decimal places
+        # Explicitly round the current price to 2 decimal places
         current_price = round(float(close.iloc[-1]), 2)
         
         # Momentum & Moving Averages
@@ -141,7 +140,7 @@ def analyze_candidate_fundamentals(ticker, sector_theme):
         elif twin_engine_pat_cagr <= 55.0: five_x_feasibility += 25
         if roe_pct >= 18.0 and de_val <= 0.5: five_x_feasibility += 30
         
-        # FIX: Replaced em-dashes (—) with standard hyphens (-) for PDF compatibility
+        # PDF/Unicode safe strings (using standard hyphens '-')
         if score >= 75 and five_x_feasibility >= 65 and len(red_flags) == 0:
             tier = "TIER A - High-Conviction Candidate"
             confidence = "HIGH"
@@ -187,7 +186,7 @@ def run_four_agent_dossier(candidate):
     context_data = f"""
     Target Stock: {sym} (NSE India) | Sector/Theme: {theme}
     Current Financial Profile:
-    - Current Price: ₹{candidate['Price (₹)']} | 3-Year 5x Target Price: ₹{candidate['Target 5x Price (₹)']}
+    - Current Price: ₹{float(candidate['Price (₹)']):.2f} | 3-Year 5x Target Price: ₹{float(candidate['Target 5x Price (₹)']):.2f}
     - Current MCap: ₹{candidate['Market Cap (Cr)']} Cr | Target 5x MCap: ₹{candidate['Target 5x Cap (Cr)']} Cr
     - Valuation (P/E): {candidate['P/E']} | Target Projected Multiple: {candidate['Target Multiple']}x
     - Required 3-Year PAT CAGR: {candidate['Req PAT CAGR (Twin Engine)']} (Twin Engine)
@@ -210,14 +209,38 @@ def run_four_agent_dossier(candidate):
     ### FINAL JUDGE COMMITTEE VERDICT
     """
     
-    try:
-        response = ai_client.models.generate_content(
-            model=ai_model_name,
-            contents=master_prompt
-        )
-        return {"full_dossier": response.text}
-    except Exception as e:
-        return {"full_dossier": f"AI Committee generation encountered network error: {e}. Deterministic calculations remain valid."}
+    # Auto-Fallback Loop for APIs
+    fallback_models = [
+        "gemini-3.6-flash", 
+        "gemini-3.5-flash", 
+        "gemini-2.5-flash", 
+        "gemini-2.0-flash",
+        "gemini-1.5-flash"
+    ]
+    
+    for model_name in fallback_models:
+        try:
+            response = ai_client.models.generate_content(
+                model=model_name,
+                contents=master_prompt
+            )
+            return {"full_dossier": response.text}
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "404" in error_msg or "not found" in error_msg or "no longer available" in error_msg:
+                continue # Try the next model
+            elif "429" in error_msg or "quota" in error_msg:
+                time.sleep(10) # Pause and try again
+                try:
+                    retry_response = ai_client.models.generate_content(model=model_name, contents=master_prompt)
+                    return {"full_dossier": retry_response.text}
+                except Exception as retry_e:
+                    return {"full_dossier": f"API Quota Exceeded. Please try again in 1 minute."}
+            else:
+                return {"full_dossier": f"AI Committee generation failed: {e}. Deterministic calculations remain valid."}
+                
+    return {"full_dossier": "Error: All AI models restricted. Deterministic calculations remain valid."}
 
 # =========================================================
 # 5. INSTITUTIONAL PDF REPORT GENERATOR (FPDF2)
@@ -256,7 +279,7 @@ def build_pdf_report(candidate_list, dossier_dict):
     for c in candidate_list:
         pdf.cell(25, 5, c['Symbol'], 1, 0, 'C')
         pdf.cell(35, 5, c['Theme'][:20], 1, 0, 'L')
-        # FIX: Decimal formatting to exactly 2 places
+        # Explicit .2f formatting to prevent long decimals
         pdf.cell(22, 5, f"{float(c['Price (₹)']):.2f}", 1, 0, 'C')
         pdf.cell(25, 5, f"{c['Market Cap (Cr)']:,}", 1, 0, 'C')
         pdf.cell(20, 5, f"{c['Overall Score (/100)']}/100", 1, 0, 'C')
@@ -270,12 +293,12 @@ def build_pdf_report(candidate_list, dossier_dict):
         pdf.set_font("helvetica", "B", 11)
         pdf.set_text_color(20, 35, 60)
         
-        # FIX: Reset X and restrict width to 190 to prevent FPDFException
+        # Reset X and restrict width to 190 to prevent horizontal space FPDF error
         pdf.set_x(10) 
         pdf.cell(0, 6, f"Dossier: {sym} ({c['Theme']})", ln=1)
         
         pdf.set_font("helvetica", "", 8)
-        # FIX: Explicit 2 decimal places for Price stats
+        # Explicit .2f decimal places for Price stats
         stats_line1 = f"Current Price: INR {float(c['Price (₹)']):.2f} | 3Y Target (5x): INR {float(c['Target 5x Price (₹)']):.2f} | MCap: INR {c['Market Cap (Cr)']:,} Cr | Target MCap: INR {c['Target 5x Cap (Cr)']:,} Cr"
         stats_line2 = f"P/E: {c['P/E']} | ROE: {c['ROE (%)']}% | OPM: {c['OPM (%)']}% | D/E: {c['Debt/Equity']} | Cash Conv: {c['Cash Conv (OCF/PAT)']} | Req 3Y PAT CAGR: {c['Req PAT CAGR (Twin Engine)']}"
         
@@ -298,7 +321,7 @@ def build_pdf_report(candidate_list, dossier_dict):
 # 6. DASHBOARD USER INTERFACE & EXECUTION
 # =========================================================
 st.sidebar.header("🎯 Universe & Filter Controls")
-selected_theme = st.sidebar.selectbox("Select Theme Focus:", ["All Themes (Full 25-Stock Pipeline)"] + list(UNIVERSE_THEMES.keys()))
+selected_theme = st.sidebar.selectbox("Select Theme Focus:", ["All Themes (Full Pipeline)"] + list(UNIVERSE_THEMES.keys()))
 min_conviction = st.sidebar.slider("Minimum Checklist Score (/100):", 40, 90, 60)
 
 if st.button("🚀 Execute 5× Multibagger Research Pipeline"):
@@ -311,7 +334,7 @@ if st.button("🚀 Execute 5× Multibagger Research Pipeline"):
                 res = analyze_candidate_fundamentals(t, theme_name)
                 if res:
                     all_candidates.append(res)
-                time.sleep(0.1)
+                time.sleep(0.1) # Light sleep for yfinance
                 
         df_candidates = pd.DataFrame(all_candidates)
 
@@ -327,6 +350,8 @@ if st.button("🚀 Execute 5× Multibagger Research Pipeline"):
             "P/E", "ROE (%)", "Debt/Equity", "Cash Conv (OCF/PAT)", 
             "Req PAT CAGR (Twin Engine)", "Overall Score (/100)", "5x Feasibility (/100)", "Tier"
         ]
+        
+        # Display the table
         st.dataframe(df_sorted[display_cols], use_container_width=True)
 
         st.subheader("🏛️ Phase 3 & 4: 4-Agent Research Dossiers & Final Synthesis")
@@ -343,9 +368,8 @@ if st.button("🚀 Execute 5× Multibagger Research Pipeline"):
                 dossier_text_map[sym] = dossier_content
                 
                 status_color = "🟢" if "TIER A" in candidate["Tier"] else "🟡"
-                with st.expander(f"{status_color} {sym} ({candidate['Theme']}) — 5x Feasibility: {candidate['5x Feasibility (/100)']}/100 | Score: {candidate['Overall Score (/100)']}/100", expanded=True):
+                with st.expander(f"{status_color} {sym} ({candidate['Theme']}) | 5x Feasibility: {candidate['5x Feasibility (/100)']}/100 | Score: {candidate['Overall Score (/100)']}/100", expanded=True):
                     c1, c2, c3, c4 = st.columns(4)
-                    # FIX: Explicit 2 decimal places for Streamlit display
                     c1.metric("Current Price", f"₹{float(candidate['Price (₹)']):,.2f}")
                     c1.metric("3Y 5x Target", f"₹{float(candidate['Target 5x Price (₹)']):,.2f}")
                     c2.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
