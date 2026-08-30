@@ -395,7 +395,9 @@ with tab_core:
                         if candidate["Red Flags"]:
                             st.warning(f"⚠️ Flagged Overhangs: {', '.join([f[1] for f in candidate['Red Flags']])}")
                         st.markdown(dossier_content)
-                    time.sleep(1.0)
+                    
+                    # NEW FIX: 5.0 second cooldown timer to prevent API Rate Limit (429) errors
+                    time.sleep(5.0)
 
             if top_core_picks:
                 pdf_bytes_core = build_pdf_report(top_core_picks, core_dossier_map, "Core Multibagger Candidates")
@@ -470,7 +472,9 @@ with tab_smallcap:
                             st.success("✅ Zero Critical Forensic Flags")
                             
                         st.markdown(dossier_content)
-                    time.sleep(1.0)
+                    
+                    # NEW FIX: 5.0 second cooldown timer to prevent API Rate Limit (429) errors
+                    time.sleep(5.0)
 
             if top_sc_picks:
                 pdf_bytes_sc = build_pdf_report(top_sc_picks, sc_dossier_map, "Small-Cap & Turnaround Candidates")
