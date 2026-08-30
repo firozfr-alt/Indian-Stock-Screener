@@ -30,7 +30,7 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets for LLM Committee)")
 
 # =========================================================
-# 2. DEFINED UNIVERSE PER TAB
+# 2. DEFINED UNIVERSE PER TAB (SAFELY FORMATTED)
 # =========================================================
 CORE_MULTIBAGGER_THEMES = {
     "EMS & Electronics Manufacturing": ["DIXON.NS", "KAYNES.NS", "SYRMA.NS", "AMBER.NS", "PGEL.NS"],
@@ -40,12 +40,13 @@ CORE_MULTIBAGGER_THEMES = {
     "Consumer & Emerging Franchises": ["TRENT.NS", "ZOMATO.NS", "MAPMYINDIA.NS", "DEVYANI.NS", "JUBLFOOD.NS"]
 }
 
+# The ₹ symbols have been replaced with INR to prevent PDF Unicode crashes
 SMALLCAP_PENNY_THEMES = {
-    "High-Growth Micro & Small-Caps (<₹5,000 Cr)": [
+    "High-Growth Micro & Small-Caps (< INR 5,000 Cr)": [
         "MARKSANS.NS", "GENUSPOWER.NS", "SAKSOFT.NS", "SERVOTECH.NS", "ZENTEC.NS", 
         "ELECON.NS", "PCBL.NS", "TARC.NS", "LLOYDSENGG.NS", "GANDHITUBE.NS"
     ],
-    "Turnaround & Value Recovery (<₹150 / Distressed)": [
+    "Turnaround & Value Recovery (< INR 150 / Distressed)": [
         "SUZLON.NS", "RPOWER.NS", "JPPOWER.NS", "HCC.NS", "IFCI.NS", 
         "SOUTHBANK.NS", "UCOBANK.NS", "RCF.NS", "MMTC.NS"
     ]
@@ -132,7 +133,6 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         # Strategy-Specific Scoring
         score = 0
         if strategy_type == "smallcap":
-            # Strict Solvency & Survival Filter
             if de_val <= 0.2: score += 25
             elif de_val <= 0.6: score += 15
             if cash_conversion >= 0.75: score += 25
@@ -142,7 +142,6 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             if opm_pct >= 10.0: score += 15
             if current_price > sma_50: score += 15
         else:
-            # Compounding Moat & Scale Filter
             if roe_pct >= 20.0: score += 20
             elif roe_pct >= 14.0: score += 14
             if de_val <= 0.3: score += 15
@@ -240,7 +239,7 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
             if "404" in error_msg or "not found" in error_msg: 
                 continue
             elif "429" in error_msg or "quota" in error_msg:
-                time.sleep(8)
+                time.sleep(10)
                 try:
                     retry_res = ai_client.models.generate_content(model=model_name, contents=master_prompt)
                     return {"full_dossier": retry_res.text}
@@ -252,7 +251,7 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     return {"full_dossier": "AI models temporarily unavailable. Mathematical scores remain valid."}
 
 # =========================================================
-# 5. PDF DOSSIER GENERATOR
+# 5. PDF DOSSIER GENERATOR (UNICODE-SAFE)
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -271,7 +270,9 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
     
     pdf.set_font("helvetica", "B", 10)
     pdf.set_text_color(0, 50, 100)
-    pdf.cell(0, 6, f"1. Executive Summary: {report_title}", ln=True)
+    # Replaced ₹ with INR here as a precaution
+    safe_title = report_title.replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
+    pdf.cell(0, 6, f"1. Executive Summary: {safe_title}", ln=True)
     pdf.ln(1)
     
     pdf.set_font("helvetica", "B", 8)
@@ -286,8 +287,11 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
     
     pdf.set_font("helvetica", "", 7.5)
     for c in candidate_list:
+        # Create a completely PDF-safe string
+        safe_theme = c['Theme'].replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
+        
         pdf.cell(25, 5, c['Symbol'], 1, 0, 'C')
-        pdf.cell(35, 5, c['Theme'][:20], 1, 0, 'L')
+        pdf.cell(35, 5, safe_theme[:20], 1, 0, 'L')
         pdf.cell(22, 5, f"{float(c['Price (₹)']):.2f}", 1, 0, 'C')
         pdf.cell(25, 5, f"{c['Market Cap (Cr)']:,}", 1, 0, 'C')
         pdf.cell(20, 5, f"{c['Overall Score (/100)']}/100", 1, 0, 'C')
@@ -297,10 +301,12 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
 
     for c in candidate_list:
         sym = c['Symbol']
+        safe_theme = c['Theme'].replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
+        
         pdf.set_font("helvetica", "B", 10)
         pdf.set_text_color(20, 35, 60)
         pdf.set_x(10)
-        pdf.cell(0, 6, f"Dossier: {sym} ({c['Theme']})", ln=1)
+        pdf.cell(0, 6, f"Dossier: {sym} ({safe_theme})", ln=1)
         
         pdf.set_font("helvetica", "", 8)
         stats1 = f"Price: INR {float(c['Price (₹)']):.2f} | 3Y Target: INR {float(c['Target 3x Price (₹)']):.2f} | MCap: INR {c['Market Cap (Cr)']:,} Cr | Target MCap: INR {c['Target 3x Cap (Cr)']:,} Cr"
@@ -314,7 +320,8 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
 
         if sym in dossier_dict:
             pdf.set_font("helvetica", "I", 7.5)
-            clean_text = dossier_dict[sym].encode('latin-1', 'replace').decode('latin-1')
+            # Ensure text returned by AI is scrubbed of unsupported rupees symbols
+            clean_text = dossier_dict[sym].replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
             pdf.set_x(10)
             pdf.multi_cell(190, 3.8, clean_text)
         pdf.ln(4)
@@ -388,7 +395,7 @@ with tab_core:
                         if candidate["Red Flags"]:
                             st.warning(f"⚠️ Flagged Overhangs: {', '.join([f[1] for f in candidate['Red Flags']])}")
                         st.markdown(dossier_content)
-                    time.sleep(0.8)
+                    time.sleep(1.0)
 
             if top_core_picks:
                 pdf_bytes_core = build_pdf_report(top_core_picks, core_dossier_map, "Core Multibagger Candidates")
@@ -403,7 +410,7 @@ with tab_core:
 # TAB 2: SMALL-CAP & TURNAROUND SCREENER
 # ---------------------------------------------------------
 with tab_smallcap:
-    st.subheader("Micro/Small-Cap Compounders (<₹5,000 Cr) & Value Turnarounds")
+    st.subheader("Micro/Small-Cap Compounders (< INR 5,000 Cr) & Value Turnarounds")
     selected_sc_theme = st.selectbox(
         "Select Small-Cap Sub-Strategy:", 
         list(SMALLCAP_PENNY_THEMES.keys()),
@@ -463,7 +470,7 @@ with tab_smallcap:
                             st.success("✅ Zero Critical Forensic Flags")
                             
                         st.markdown(dossier_content)
-                    time.sleep(0.8)
+                    time.sleep(1.0)
 
             if top_sc_picks:
                 pdf_bytes_sc = build_pdf_report(top_sc_picks, sc_dossier_map, "Small-Cap & Turnaround Candidates")
