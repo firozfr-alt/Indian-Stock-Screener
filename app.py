@@ -171,13 +171,13 @@ def analyze_candidate_fundamentals(ticker, sector_theme):
         
         # Confidence & Classification
         if score >= 75 and five_x_feasibility >= 65 and len(red_flags) == 0:
-            tier = "TIER A — High-Conviction Research Candidate"
+            tier = "TIER A - High-Conviction Candidate"
             confidence = "HIGH"
         elif score >= 60 and five_x_feasibility >= 50:
-            tier = "TIER B — Potential Compounder (Needs Monitoring)"
+            tier = "TIER B - Potential Compounder"
             confidence = "MEDIUM"
         else:
-            tier = "TIER C — Speculative / High Hurdle"
+            tier = "TIER C - Speculative / High Hurdle"
             confidence = "LOW"
 
         return {
