@@ -3,5 +3,4 @@ pandas
 numpy
 yfinance
 google-genai
-openai
 fpdf2
