@@ -18,21 +18,26 @@ st.title("🏛️ Institutional Indian Equity Screener")
 st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks")
 
 # =========================================================
-# 1. OMNI-AI ROUTER INITIALIZATION
+# 1. OMNI-AI ROUTER INITIALIZATION (PRIORITY SORTED)
 # =========================================================
 st.sidebar.header("🧠 AI Engine Selector")
 
 available_ais = []
-gemini_client = None
-or_client = None
 grok_client = None
+or_client = None
+gemini_client = None
 
-if "GEMINI_API_KEY" in st.secrets:
+# 1. Priority 1: Grok (Fastest, no strict RPM bottlenecks)
+if "XAI_API_KEY" in st.secrets:
     try:
-        gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-        available_ais.append("Gemini (Google)")
+        grok_client = OpenAI(
+            base_url="https://api.x.ai/v1",
+            api_key=st.secrets["XAI_API_KEY"]
+        )
+        available_ais.append("Grok (xAI)")
     except Exception: pass
 
+# 2. Priority 2: OpenRouter (Fast, massive free model catalog)
 if "OPENROUTER_API_KEY" in st.secrets:
     try:
         or_client = OpenAI(
@@ -43,14 +48,13 @@ if "OPENROUTER_API_KEY" in st.secrets:
         available_ais.append("OpenRouter (Llama 3 / DeepSeek)")
     except Exception: pass
 
-if "XAI_API_KEY" in st.secrets:
+# 3. Priority 3: Gemini (Placed last due to strict 15 RPM free tier limits)
+if "GEMINI_API_KEY" in st.secrets:
     try:
-        grok_client = OpenAI(
-            base_url="https://api.x.ai/v1",
-            api_key=st.secrets["XAI_API_KEY"]
-        )
-        available_ais.append("Grok (xAI)")
+        gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        available_ais.append("Gemini (Google)")
     except Exception: pass
+
 
 if available_ais:
     selected_ai = st.sidebar.selectbox("Active Research AI:", available_ais)
@@ -220,8 +224,47 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. OMNI-AI MULTI-AGENT COMMITTEE
+# 4. OMNI-AI MULTI-AGENT COMMITTEE (WITH CROSS-PROVIDER FALLBACK)
 # =========================================================
+def call_grok(prompt):
+    if not grok_client: return None
+    for model_name in ["grok-2-latest", "grok-beta"]:
+        try:
+            res = grok_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1500
+            )
+            return res.choices[0].message.content
+        except Exception: continue
+    return None
+
+def call_openrouter(prompt):
+    if not or_client: return None
+    # Auto-routes to available free models (Llama, DeepSeek, etc.)
+    for model_name in ["openrouter/free", "meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-r1:free"]:
+        try:
+            res = or_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1500
+            )
+            return res.choices[0].message.content
+        except Exception: continue
+    return None
+
+def call_gemini(prompt):
+    if not gemini_client: return None
+    for model_name in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
+        try:
+            response = gemini_client.models.generate_content(model=model_name, contents=prompt)
+            return response.text
+        except Exception as e:
+            # If rate limited, instantly break out so it can fallback to Grok/OpenRouter
+            if "429" in str(e) or "quota" in str(e).lower(): return "RATE_LIMITED"
+            if "404" in str(e): continue
+    return None
+
 def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     sym = candidate["Symbol"]
     theme = candidate["Theme"]
@@ -268,40 +311,26 @@ def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     {agent_instructions}
     """
     
-    try:
-        if active_ai == "Gemini (Google)":
-            for model_name in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
-                try:
-                    response = gemini_client.models.generate_content(model=model_name, contents=master_prompt)
-                    return {"full_dossier": response.text}
-                except Exception as e:
-                    if "404" in str(e): continue
-                    if "429" in str(e) or "quota" in str(e).lower(): return {"full_dossier": "Gemini API Rate Limit Reached."}
-            
-        elif active_ai == "OpenRouter (Llama 3 / DeepSeek)":
-            for model_name in ["meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-r1:free"]:
-                try:
-                    res = or_client.chat.completions.create(
-                        model=model_name,
-                        messages=[{"role": "user", "content": master_prompt}],
-                        max_tokens=1500
-                    )
-                    return {"full_dossier": res.choices[0].message.content}
-                except Exception: continue
-                
-        elif active_ai == "Grok (xAI)":
-            for model_name in ["grok-2-latest", "grok-beta"]:
-                try:
-                    res = grok_client.chat.completions.create(
-                        model=model_name,
-                        messages=[{"role": "user", "content": master_prompt}],
-                        max_tokens=1500
-                    )
-                    return {"full_dossier": res.choices[0].message.content}
-                except Exception: continue
+    # 1. Try Primary AI Selection
+    result = None
+    if active_ai == "Gemini (Google)": result = call_gemini(master_prompt)
+    elif active_ai == "OpenRouter (Llama 3 / DeepSeek)": result = call_openrouter(master_prompt)
+    elif active_ai == "Grok (xAI)": result = call_grok(master_prompt)
+    
+    if result and result != "RATE_LIMITED":
+        return {"full_dossier": result}
 
-    except Exception as general_e:
-        return {"full_dossier": f"AI Engine Error: {general_e}"}
+    # 2. CROSS-PROVIDER FALLBACK (If Primary hits a Rate Limit or Fails)
+    if active_ai == "Gemini (Google)" or result == "RATE_LIMITED":
+        # Silently try Grok
+        backup = call_grok(master_prompt)
+        if backup: return {"full_dossier": f"{backup}\n\n*(Note: Generated via Grok due to Gemini Rate Limits)*"}
+        
+        # Silently try OpenRouter
+        backup = call_openrouter(master_prompt)
+        if backup: return {"full_dossier": f"{backup}\n\n*(Note: Generated via OpenRouter due to Gemini Rate Limits)*"}
+        
+        return {"full_dossier": "Gemini API Rate Limit Reached, and no backup API keys were available."}
         
     return {"full_dossier": f"{active_ai} models temporarily unavailable. Math remains valid."}
 
@@ -371,7 +400,7 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
     return bytes(pdf.output())
 
 # =========================================================
-# 6. TRI-TAB UI WORKFLOW (WITH SMART RATE-LIMITING)
+# 6. TRI-TAB UI WORKFLOW
 # =========================================================
 tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Core Compounders", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
 
@@ -432,11 +461,8 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                             st.success("✅ Zero Critical Flags")
                         st.markdown(content)
                     
-                    # SMART COOLDOWN: 15s for Gemini, 1s for OpenRouter/Grok
-                    if selected_ai == "Gemini (Google)":
-                        time.sleep(15.0)
-                    else:
-                        time.sleep(1.0)
+                    # 1s Cooldown (We can run fast now because of the True Omni-Fallback)
+                    time.sleep(1.0)
 
             if top_picks:
                 pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Candidates")
