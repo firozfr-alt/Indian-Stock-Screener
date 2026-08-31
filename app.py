@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from google import genai
-from openai import OpenAI
 import time
 from datetime import datetime
 from fpdf import FPDF
@@ -15,49 +14,20 @@ st.set_page_config(
 )
 
 st.title("🏛️ Institutional Indian Equity Screener")
-st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks")
+st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks (Powered exclusively by Google Gemini)")
 
 # =========================================================
-# 1. OMNI-AI ROUTER INITIALIZATION
+# 1. GEMINI AI INITIALIZATION
 # =========================================================
-st.sidebar.header("🧠 AI Engine Selector")
-
-available_ais = []
-grok_client = None
-or_client = None
-gemini_client = None
-
-if "OPENROUTER_API_KEY" in st.secrets:
-    try:
-        or_client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=st.secrets["OPENROUTER_API_KEY"],
-            default_headers={"HTTP-Referer": "https://streamlit.io", "X-Title": "Equity Screener"}
-        )
-        available_ais.append("OpenRouter (Llama / Gemma)")
-    except Exception: pass
-
-if "XAI_API_KEY" in st.secrets:
-    try:
-        grok_client = OpenAI(
-            base_url="https://api.x.ai/v1",
-            api_key=st.secrets["XAI_API_KEY"]
-        )
-        available_ais.append("Grok (xAI)")
-    except Exception: pass
-
+ai_client = None
 if "GEMINI_API_KEY" in st.secrets:
     try:
-        gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-        available_ais.append("Gemini (Google)")
-    except Exception: pass
-
-if available_ais:
-    selected_ai = st.sidebar.selectbox("Primary Research AI:", available_ais)
-    st.sidebar.success(f"✅ {selected_ai} Selected (With Auto-Fallback)")
+        ai_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        st.sidebar.success("✅ Google Gemini AI: Online (Fortress Mode)")
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Gemini Offline: {e}. Deterministic engine active.")
 else:
-    selected_ai = None
-    st.sidebar.warning("⚠️ No API Keys Found. Running purely on Deterministic Math Engine.")
+    st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
 # 2. DEFINED UNIVERSES PER TAB
@@ -220,61 +190,9 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. TRUE OMNI-CASCADE AI ENGINE (BULLETPROOF)
+# 4. GEMINI FORTRESS RETRY ENGINE
 # =========================================================
-def call_openrouter(prompt):
-    if not or_client: return None, "OpenRouter Key Missing"
-    # Using highly reliable, verified free model slugs
-    free_models = [
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "google/gemma-2-9b-it:free",
-        "microsoft/phi-3-mini-128k-instruct:free",
-        "qwen/qwen-2-7b-instruct:free"
-    ]
-    for model in free_models:
-        try:
-            res = or_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500
-            )
-            content = res.choices[0].message.content
-            # Check if the API successfully returned REAL text (fixes the 'None' error)
-            if content and content.strip() != "":
-                return content.strip(), None
-        except Exception:
-            pass # Silently skip to the next model on ANY error
-    return None, "All OpenRouter Free Models Failed"
-
-def call_grok(prompt):
-    if not grok_client: return None, "Grok Key Missing"
-    for model in ["grok-2-latest", "grok-beta"]:
-        try:
-            res = grok_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500
-            )
-            content = res.choices[0].message.content
-            if content and content.strip() != "":
-                return content.strip(), None
-        except Exception:
-            pass
-    return None, "Grok Models Failed"
-
-def call_gemini(prompt):
-    if not gemini_client: return None, "Gemini Key Missing"
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
-        try:
-            res = gemini_client.models.generate_content(model=model, contents=prompt)
-            if res.text and res.text.strip() != "":
-                return res.text.strip(), None
-        except Exception as e:
-            if "429" in str(e) or "quota" in str(e).lower(): return None, "Gemini Rate Limit"
-            pass
-    return None, "Gemini Models Failed"
-
-def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
+def run_four_agent_dossier(candidate, strategy_type="core"):
     sym = candidate["Symbol"]
     theme = candidate["Theme"]
     
@@ -304,7 +222,7 @@ def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     Flags: {[f[1] for f in candidate['Red Flags']]}
     """
 
-    if not active_ai: 
+    if not ai_client: 
         return {"full_dossier": f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."}
 
     master_prompt = f"""
@@ -320,34 +238,38 @@ def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     {agent_instructions}
     """
     
-    # Establish priority order based on user selection
-    ai_cascade_order = []
-    if active_ai == "OpenRouter (Llama / Gemma)": 
-        ai_cascade_order = [call_openrouter, call_grok, call_gemini]
-    elif active_ai == "Grok (xAI)": 
-        ai_cascade_order = [call_grok, call_openrouter, call_gemini]
-    elif active_ai == "Gemini (Google)": 
-        ai_cascade_order = [call_gemini, call_openrouter, call_grok]
-    else:
-        ai_cascade_order = [call_openrouter, call_grok, call_gemini]
-
-    error_logs = []
+    # Google's most reliable and generous free-tier models 
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     
-    # The Brute-Force Loop: Try engines until one gives a REAL answer
-    for index, engine in enumerate(ai_cascade_order):
-        result, err = engine(master_prompt)
-        
-        if result:
-            note = ""
-            if index > 0: # If it wasn't the first choice, add a small note
-                note = f"\n\n*(Note: Primary AI failed. Automatically routed to backup AI engine.)*"
-            return {"full_dossier": result + note}
-            
-        if err:
-            error_logs.append(err)
-            
-    # If it reached here, every single API completely failed
-    return {"full_dossier": f"**API Connection Error:** All AI Engines Failed.\nDiagnostics: {', '.join(error_logs)}"}
+    # Deep Retry System: It will attempt to get a response 3 times per model
+    for model_name in models_to_try:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = ai_client.models.generate_content(model=model_name, contents=master_prompt)
+                
+                if response.text and response.text.strip() != "":
+                    return {"full_dossier": response.text.strip()}
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # 1. CATCH RATE LIMITS (429) -> Pause and try this exactly model again
+                if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "rate limit" in error_str:
+                    time.sleep(20) # A full 20-second pause resets Google's internal RPM tracker
+                    continue 
+                    
+                # 2. CATCH DEAD MODELS (404/400) -> Break the inner loop, move to the next model
+                elif "404" in error_str or "not found" in error_str or "invalid" in error_str or "400" in error_str:
+                    break 
+                    
+                # 3. CATCH SAFETY BLOCKS / OTHER -> Move to next model
+                else:
+                    break
+                    
+    # If the code reaches this line, every model failed all its retries (Extremely Rare)
+    return {"full_dossier": "Gemini API servers are overloaded after multiple retries. Deterministic Math remains 100% valid."}
+
 
 # =========================================================
 # 5. PDF DOSSIER GENERATOR 
@@ -425,7 +347,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
     min_score = st.slider("Minimum Quality Score (/100):", 35, 90, min_score_default, key=f"sld_{strategy}")
 
     if st.button(f"🚀 Run {strategy.capitalize()} Pipeline", key=f"btn_{strategy}"):
-        with st.spinner(f"Running Data Audit & {selected_ai or 'Deterministic'} Engine..."):
+        with st.spinner("Running Data Audit & Gemini Engine..."):
             all_cands = []
             scan_map = theme_dict if selected_theme.startswith("All") else {selected_theme: theme_dict[selected_theme]}
             
@@ -453,8 +375,8 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
             st.markdown(f"### 🔬 {strategy.capitalize()} Research Dossiers")
             for candidate in top_picks:
                 sym = candidate["Symbol"]
-                with st.spinner(f"AI Audit on {sym}..."):
-                    dossier = run_four_agent_dossier(candidate, strategy_type=strategy, active_ai=selected_ai)
+                with st.spinner(f"Gemini Audit on {sym}..."):
+                    dossier = run_four_agent_dossier(candidate, strategy_type=strategy)
                     content = dossier.get("full_dossier", "")
                     dossier_map[sym] = content
                     
@@ -476,10 +398,8 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                             st.success("✅ Zero Critical Flags")
                         st.markdown(content)
                     
-                    if selected_ai == "Gemini (Google)":
-                        time.sleep(15.0)
-                    else:
-                        time.sleep(1.0)
+                    # PACE MAKER: A strict 15-second gap between successful stocks keeps you safely under the 15 RPM limit 
+                    time.sleep(15.0)
 
             if top_picks:
                 pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Candidates")
