@@ -9,7 +9,7 @@ from datetime import datetime
 from fpdf import FPDF
 
 st.set_page_config(
-    page_title="Indian Multibagger AI Analyst (Diagnostic)",
+    page_title="Indian Multibagger AI Analyst",
     page_icon="📈",
     layout="wide"
 )
@@ -34,7 +34,7 @@ if "OPENROUTER_API_KEY" in st.secrets:
             api_key=st.secrets["OPENROUTER_API_KEY"],
             default_headers={"HTTP-Referer": "https://streamlit.io", "X-Title": "Equity Screener"}
         )
-        available_ais.append("OpenRouter (Llama 3 / DeepSeek)")
+        available_ais.append("OpenRouter (DeepSeek / Llama)")
     except Exception: pass
 
 if "XAI_API_KEY" in st.secrets:
@@ -220,11 +220,20 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. DIAGNOSTIC OMNI-AI ENGINE 
+# 4. DIAGNOSTIC OMNI-AI ENGINE (WITH IRONCLAD OPENROUTER FIX)
 # =========================================================
 def call_openrouter(prompt):
     if not or_client: return None, "OpenRouter client not initialized (Key missing)."
-    for model_name in ["meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-r1:free"]:
+    
+    # Expanded list of highly reliable, free OpenRouter models
+    free_models = [
+        "deepseek/deepseek-r1:free",
+        "google/gemini-2.0-flash-lite-preview-02-05:free",
+        "meta-llama/llama-3.1-8b-instruct:free",
+        "mistralai/mistral-nemo:free"
+    ]
+    
+    for model_name in free_models:
         try:
             res = or_client.chat.completions.create(
                 model=model_name,
@@ -233,9 +242,13 @@ def call_openrouter(prompt):
             )
             return res.choices[0].message.content, None
         except Exception as e:
-            if "429" in str(e): continue
+            error_str = str(e).lower()
+            # If the model is rate limited (429) OR currently unavailable for free (404), move to the next model!
+            if "429" in error_str or "404" in error_str or "unavailable" in error_str:
+                continue
             return None, f"OpenRouter Error ({model_name}): {e}"
-    return None, "OpenRouter free models are currently overloaded (429 Rate Limit)."
+            
+    return None, "All OpenRouter free models are currently overloaded. Please try again in a few minutes."
 
 def call_grok(prompt):
     if not grok_client: return None, "Grok client not initialized (Key missing)."
@@ -312,7 +325,7 @@ def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     error_msg = ""
     
     if active_ai == "Gemini (Google)": result, error_msg = call_gemini(master_prompt)
-    elif active_ai == "OpenRouter (Llama 3 / DeepSeek)": result, error_msg = call_openrouter(master_prompt)
+    elif active_ai == "OpenRouter (DeepSeek / Llama)": result, error_msg = call_openrouter(master_prompt)
     elif active_ai == "Grok (xAI)": result, error_msg = call_grok(master_prompt)
     
     if result:
