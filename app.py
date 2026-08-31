@@ -3,31 +3,61 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from google import genai
+from openai import OpenAI
 import time
 from datetime import datetime
 from fpdf import FPDF
 
 st.set_page_config(
-    page_title="Indian Multibagger AI Analyst",
+    page_title="Indian Multibagger AI Analyst (Omni-AI)",
     page_icon="📈",
     layout="wide"
 )
 
 st.title("🏛️ Institutional Indian Equity Screener")
-st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny & Micro-Caps")
+st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks")
 
 # =========================================================
-# 1. AI CORE INITIALIZATION
+# 1. OMNI-AI ROUTER INITIALIZATION
 # =========================================================
-ai_client = None
+st.sidebar.header("🧠 AI Engine Selector")
+
+available_ais = []
+gemini_client = None
+or_client = None
+grok_client = None
+
 if "GEMINI_API_KEY" in st.secrets:
     try:
-        ai_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-        st.sidebar.success("✅ AI Research Core: Online")
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ AI Offline: {e}. Deterministic engine active.")
+        gemini_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        available_ais.append("Gemini (Google)")
+    except Exception: pass
+
+if "OPENROUTER_API_KEY" in st.secrets:
+    try:
+        or_client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=st.secrets["OPENROUTER_API_KEY"],
+            default_headers={"HTTP-Referer": "https://streamlit.io", "X-Title": "Equity Screener"}
+        )
+        available_ais.append("OpenRouter (Llama 3 / DeepSeek)")
+    except Exception: pass
+
+if "XAI_API_KEY" in st.secrets:
+    try:
+        grok_client = OpenAI(
+            base_url="https://api.x.ai/v1",
+            api_key=st.secrets["XAI_API_KEY"]
+        )
+        available_ais.append("Grok (xAI)")
+    except Exception: pass
+
+if available_ais:
+    selected_ai = st.sidebar.selectbox("Active Research AI:", available_ais)
+    st.sidebar.success(f"✅ {selected_ai} Online")
 else:
-    st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets for LLM Committee)")
+    selected_ai = None
+    st.sidebar.warning("⚠️ No API Keys Found. Running purely on Deterministic Math Engine.")
 
 # =========================================================
 # 2. DEFINED UNIVERSES PER TAB
@@ -72,7 +102,6 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         
         info = stock.info or {}
         fin = stock.financials
-        bs = stock.balance_sheet
         cf = stock.cashflow
         
         market_cap_cr = round(info.get('marketCap', 0) / 10000000, 2)
@@ -111,12 +140,10 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         multiple_expansion_ratio = target_pe_benchmark / current_pe_benchmark
         twin_engine_pat_cagr = round((((3.0 / multiple_expansion_ratio) ** (1/3)) - 1) * 100, 2)
 
-        # Base Red Flags
         red_flags = []
         if de_val > 1.2: red_flags.append(("CRITICAL", f"High Debt ({de_val})"))
         if cash_conversion < 0.55 and net_inc > 0: red_flags.append(("HIGH", f"Weak Cash Conv ({cash_conversion}x)"))
 
-        # Strategy Scoring
         score = 0
         feasibility = 0
         
@@ -165,13 +192,10 @@ def analyze_stock(ticker, theme, strategy_type="core"):
 
         if score >= 70 and feasibility >= 60 and len(red_flags) == 0:
             tier = "TIER A - High-Conviction"
-            confidence = "HIGH"
         elif score >= 50 and feasibility >= 45:
             tier = "TIER B - Watchlist"
-            confidence = "MEDIUM"
         else:
             tier = "TIER C - Speculative"
-            confidence = "LOW"
 
         return {
             "Symbol": ticker.replace(".NS", ""),
@@ -187,11 +211,8 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             "OPM (%)": opm_pct,
             "Debt/Equity": de_val,
             "Cash Conv (OCF/PAT)": f"{cash_conversion}x",
-            "1M (%)": ret_1m,
-            "6M (%)": ret_6m,
             "Overall Score (/100)": score,
             "3x Feasibility (/100)": feasibility,
-            "Confidence": confidence,
             "Tier": tier,
             "Red Flags": red_flags
         }
@@ -199,9 +220,9 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. MULTI-AGENT ISOLATED RESEARCH COMMITTEE
+# 4. OMNI-AI MULTI-AGENT COMMITTEE
 # =========================================================
-def run_four_agent_dossier(candidate, strategy_type="core"):
+def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     sym = candidate["Symbol"]
     theme = candidate["Theme"]
     
@@ -209,9 +230,9 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     if strategy_type == "penny":
         agent_instructions = """
         ### AGENT 1: GEMINI (Bankruptcy & Solvency Audit)
-        ### AGENT 2: GROK (Operator Manipulation & Volume Spike Analysis)
+        ### AGENT 2: GROK (Operator Manipulation & Volume Analysis)
         ### AGENT 3: CHATGPT (Real Cash Flow vs Fake Earnings Audit)
-        ### AGENT 4: CLAUDE (Delisting Risk & Promoter Fraud Check)
+        ### AGENT 4: CLAUDE (Delisting Risk & Promoter Check)
         ### FINAL JUDGE COMMITTEE VERDICT
         """
     else:
@@ -225,20 +246,20 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
 
     context_data = f"""
     Target: {sym} (NSE India) | Category: {theme} | Strategy: {strategy_type.upper()}
-    Price: ₹{float(candidate['Price (₹)']):.2f} | MCap: ₹{candidate['Market Cap (Cr)']} Cr
+    Price: INR {float(candidate['Price (₹)']):.2f} | MCap: INR {candidate['Market Cap (Cr)']} Cr
     ROE: {candidate['ROE (%)']}% | OPM: {candidate['OPM (%)']}% | P/E: {candidate['P/E']}
     D/E: {candidate['Debt/Equity']} | Cash Conv (OCF/PAT): {candidate['Cash Conv (OCF/PAT)']}
     Flags: {[f[1] for f in candidate['Red Flags']]}
     """
 
-    if not ai_client: return {"full_dossier": f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."}
+    if not active_ai: 
+        return {"full_dossier": f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."}
 
-    # FIX: Instruct AI to completely avoid Markdown Tables and ASCII Art to ensure flawless PDFs
     master_prompt = f"""
     Analyze {sym} ({strategy_type.upper()} Strategy).
     {context_data}
     
-    CRITICAL FORMATTING RULES FOR PDF EXPORT:
+    CRITICAL FORMATTING RULES:
     1. NEVER use markdown tables, grid lines, or ASCII art diagrams.
     2. Present all risks, data, and analysis using clean, standard bullet points (-).
     3. Do not use special Unicode characters or emojis.
@@ -247,24 +268,45 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     {agent_instructions}
     """
     
-    fallback_models = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
-    for model_name in fallback_models:
-        try:
-            response = ai_client.models.generate_content(model=model_name, contents=master_prompt)
-            return {"full_dossier": response.text}
-        except Exception as e:
-            if "429" in str(e).lower() or "quota" in str(e).lower():
-                time.sleep(10)
+    try:
+        if active_ai == "Gemini (Google)":
+            for model_name in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
                 try:
-                    retry = ai_client.models.generate_content(model=model_name, contents=master_prompt)
-                    return {"full_dossier": retry.text}
-                except: return {"full_dossier": "API Rate limit reached. Math remains valid."}
-            elif "404" not in str(e).lower():
-                return {"full_dossier": f"AI Error: {e}. Math remains valid."}
-    return {"full_dossier": "AI models temporarily unavailable."}
+                    response = gemini_client.models.generate_content(model=model_name, contents=master_prompt)
+                    return {"full_dossier": response.text}
+                except Exception as e:
+                    if "404" in str(e): continue
+                    if "429" in str(e) or "quota" in str(e).lower(): return {"full_dossier": "Gemini API Rate Limit Reached."}
+            
+        elif active_ai == "OpenRouter (Llama 3 / DeepSeek)":
+            for model_name in ["meta-llama/llama-3.3-70b-instruct:free", "deepseek/deepseek-r1:free"]:
+                try:
+                    res = or_client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": master_prompt}],
+                        max_tokens=1500
+                    )
+                    return {"full_dossier": res.choices[0].message.content}
+                except Exception: continue
+                
+        elif active_ai == "Grok (xAI)":
+            for model_name in ["grok-2-latest", "grok-beta"]:
+                try:
+                    res = grok_client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": master_prompt}],
+                        max_tokens=1500
+                    )
+                    return {"full_dossier": res.choices[0].message.content}
+                except Exception: continue
+
+    except Exception as general_e:
+        return {"full_dossier": f"AI Engine Error: {general_e}"}
+        
+    return {"full_dossier": f"{active_ai} models temporarily unavailable. Math remains valid."}
 
 # =========================================================
-# 5. PDF DOSSIER GENERATOR (BULLETPROOF TEXT SCRUBBER)
+# 5. PDF DOSSIER GENERATOR (CLEAN & UNICODE-SAFE)
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -319,20 +361,17 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
         pdf.ln(2)
 
         if sym in dossier_dict:
-            # FIX: Use normal font (not italics), strip out raw markdown symbols (**, ###), 
-            # and strictly IGNORE bad unicode chars instead of printing '?'
             pdf.set_font("helvetica", "", 8)
             raw_text = dossier_dict[sym].replace('₹', 'INR').replace('**', '').replace('### ', '').replace('#### ', '')
             clean_text = raw_text.encode('latin-1', 'ignore').decode('latin-1')
-            
             pdf.set_x(10)
-            pdf.multi_cell(190, 4, clean_text)
+            pdf.multi_cell(190, 3.8, clean_text)
         pdf.ln(4)
 
     return bytes(pdf.output())
 
 # =========================================================
-# 6. TRI-TAB UI LAYOUT
+# 6. TRI-TAB UI WORKFLOW (WITH SMART RATE-LIMITING)
 # =========================================================
 tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Core Compounders", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
 
@@ -342,7 +381,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
     min_score = st.slider("Minimum Quality Score (/100):", 35, 90, min_score_default, key=f"sld_{strategy}")
 
     if st.button(f"🚀 Run {strategy.capitalize()} Pipeline", key=f"btn_{strategy}"):
-        with st.spinner("Analyzing market data..."):
+        with st.spinner(f"Running Data Audit & {selected_ai or 'Deterministic'} Engine..."):
             all_cands = []
             scan_map = theme_dict if selected_theme.startswith("All") else {selected_theme: theme_dict[selected_theme]}
             
@@ -350,7 +389,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                 for t in tickers:
                     res = analyze_stock(t, t_name, strategy_type=strategy)
                     if res: all_cands.append(res)
-                    time.sleep(0.08)
+                    time.sleep(0.05)
                     
             df = pd.DataFrame(all_cands)
 
@@ -371,7 +410,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
             for candidate in top_picks:
                 sym = candidate["Symbol"]
                 with st.spinner(f"AI Audit on {sym}..."):
-                    dossier = run_four_agent_dossier(candidate, strategy_type=strategy)
+                    dossier = run_four_agent_dossier(candidate, strategy_type=strategy, active_ai=selected_ai)
                     content = dossier.get("full_dossier", "")
                     dossier_map[sym] = content
                     
@@ -379,9 +418,13 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                     with st.expander(f"{color} {sym} — Score: {candidate['Overall Score (/100)']}/100", expanded=True):
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric("Current Price", f"₹{float(candidate['Price (₹)']):,.2f}")
-                        c2.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
-                        c3.metric("Debt-to-Equity", f"{candidate['Debt/Equity']}")
-                        c4.metric("Cash Conversion", candidate['Cash Conv (OCF/PAT)'])
+                        c1.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
+                        c2.metric("Debt-to-Equity", f"{candidate['Debt/Equity']}")
+                        c2.metric("Cash Conversion", candidate['Cash Conv (OCF/PAT)'])
+                        c3.metric("ROE (%)", f"{candidate['ROE (%)']}%")
+                        c3.metric("Req. PAT CAGR", candidate['Req PAT CAGR (Twin Engine)'])
+                        c4.metric("3Y 3x Target", f"₹{float(candidate['Target 3x Price (₹)']):,.2f}")
+                        c4.metric("Target Cap", f"₹{candidate['Target 3x Cap (Cr)']:,} Cr")
                         
                         if candidate["Red Flags"]:
                             st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
@@ -389,17 +432,20 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                             st.success("✅ Zero Critical Flags")
                         st.markdown(content)
                     
-                    # 15 SECOND RATE LIMIT PROTECTOR FOR FREE API
-                    time.sleep(15.0)
+                    # SMART COOLDOWN: 15s for Gemini, 1s for OpenRouter/Grok
+                    if selected_ai == "Gemini (Google)":
+                        time.sleep(15.0)
+                    else:
+                        time.sleep(1.0)
 
             if top_picks:
                 pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Candidates")
-                st.download_button("📄 Download PDF", data=pdf, file_name=f"{strategy}_research.pdf", mime="application/pdf", key=f"dl_{strategy}")
+                st.download_button("📄 Download Clean PDF Dossier", data=pdf, file_name=f"{strategy}_research.pdf", mime="application/pdf", key=f"dl_{strategy}")
 
 # Render the 3 Tabs
 with tab_core:
     render_pipeline_ui(CORE_MULTIBAGGER_THEMES, "core", "Secular Growth & Market Leaders", 60)
 with tab_smallcap:
-    render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders (₹1K-5K Cr)", 50)
+    render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders (INR 1K-5K Cr)", 50)
 with tab_penny:
-    render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny (< ₹50) & Nano-Caps", 50)
+    render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny (< INR 50) & Nano-Caps", 50)
