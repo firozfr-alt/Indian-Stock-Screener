@@ -220,17 +220,18 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. DIAGNOSTIC OMNI-AI ENGINE (WITH IRONCLAD OPENROUTER FIX)
+# 4. DIAGNOSTIC OMNI-AI ENGINE (WITH 400 ERROR FIX & AUTO-ROUTING)
 # =========================================================
 def call_openrouter(prompt):
     if not or_client: return None, "OpenRouter client not initialized (Key missing)."
     
-    # Expanded list of highly reliable, free OpenRouter models
+    # 1. We use the "openrouter/free" slug as the primary option, which auto-routes to whatever is working.
+    # 2. We provide verified recent models as backups.
     free_models = [
-        "deepseek/deepseek-r1:free",
-        "google/gemini-2.0-flash-lite-preview-02-05:free",
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "mistralai/mistral-nemo:free"
+        "openrouter/free", 
+        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-3.5-lightning:free",
+        "meta-llama/llama-3.3-70b-instruct:free"
     ]
     
     for model_name in free_models:
@@ -243,8 +244,8 @@ def call_openrouter(prompt):
             return res.choices[0].message.content, None
         except Exception as e:
             error_str = str(e).lower()
-            # If the model is rate limited (429) OR currently unavailable for free (404), move to the next model!
-            if "429" in error_str or "404" in error_str or "unavailable" in error_str:
+            # 3. ADDED '400': If it hits a Rate Limit (429), Unavailable (404), OR Invalid ID (400), instantly skip to the next model!
+            if "429" in error_str or "404" in error_str or "400" in error_str or "unavailable" in error_str:
                 continue
             return None, f"OpenRouter Error ({model_name}): {e}"
             
