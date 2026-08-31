@@ -34,7 +34,7 @@ if "OPENROUTER_API_KEY" in st.secrets:
             api_key=st.secrets["OPENROUTER_API_KEY"],
             default_headers={"HTTP-Referer": "https://streamlit.io", "X-Title": "Equity Screener"}
         )
-        available_ais.append("OpenRouter (DeepSeek / Llama)")
+        available_ais.append("OpenRouter (Llama / Gemma)")
     except Exception: pass
 
 if "XAI_API_KEY" in st.secrets:
@@ -53,8 +53,8 @@ if "GEMINI_API_KEY" in st.secrets:
     except Exception: pass
 
 if available_ais:
-    selected_ai = st.sidebar.selectbox("Active Research AI:", available_ais)
-    st.sidebar.success(f"✅ {selected_ai} Online")
+    selected_ai = st.sidebar.selectbox("Primary Research AI:", available_ais)
+    st.sidebar.success(f"✅ {selected_ai} Selected (With Auto-Fallback)")
 else:
     selected_ai = None
     st.sidebar.warning("⚠️ No API Keys Found. Running purely on Deterministic Math Engine.")
@@ -220,60 +220,59 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. DIAGNOSTIC OMNI-AI ENGINE (WITH 400 ERROR FIX & AUTO-ROUTING)
+# 4. TRUE OMNI-CASCADE AI ENGINE (BULLETPROOF)
 # =========================================================
 def call_openrouter(prompt):
-    if not or_client: return None, "OpenRouter client not initialized (Key missing)."
-    
-    # 1. We use the "openrouter/free" slug as the primary option, which auto-routes to whatever is working.
-    # 2. We provide verified recent models as backups.
+    if not or_client: return None, "OpenRouter Key Missing"
+    # Using highly reliable, verified free model slugs
     free_models = [
-        "openrouter/free", 
-        "google/gemma-4-31b-it:free",
-        "nvidia/nemotron-3.5-lightning:free",
-        "meta-llama/llama-3.3-70b-instruct:free"
+        "meta-llama/llama-3.1-8b-instruct:free",
+        "google/gemma-2-9b-it:free",
+        "microsoft/phi-3-mini-128k-instruct:free",
+        "qwen/qwen-2-7b-instruct:free"
     ]
-    
-    for model_name in free_models:
+    for model in free_models:
         try:
             res = or_client.chat.completions.create(
-                model=model_name,
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1500
             )
-            return res.choices[0].message.content, None
-        except Exception as e:
-            error_str = str(e).lower()
-            # 3. ADDED '400': If it hits a Rate Limit (429), Unavailable (404), OR Invalid ID (400), instantly skip to the next model!
-            if "429" in error_str or "404" in error_str or "400" in error_str or "unavailable" in error_str:
-                continue
-            return None, f"OpenRouter Error ({model_name}): {e}"
-            
-    return None, "All OpenRouter free models are currently overloaded. Please try again in a few minutes."
+            content = res.choices[0].message.content
+            # Check if the API successfully returned REAL text (fixes the 'None' error)
+            if content and content.strip() != "":
+                return content.strip(), None
+        except Exception:
+            pass # Silently skip to the next model on ANY error
+    return None, "All OpenRouter Free Models Failed"
 
 def call_grok(prompt):
-    if not grok_client: return None, "Grok client not initialized (Key missing)."
-    try:
-        res = grok_client.chat.completions.create(
-            model="grok-2-latest",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1500
-        )
-        return res.choices[0].message.content, None
-    except Exception as e:
-        return None, f"Grok API Error: {e}"
+    if not grok_client: return None, "Grok Key Missing"
+    for model in ["grok-2-latest", "grok-beta"]:
+        try:
+            res = grok_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1500
+            )
+            content = res.choices[0].message.content
+            if content and content.strip() != "":
+                return content.strip(), None
+        except Exception:
+            pass
+    return None, "Grok Models Failed"
 
 def call_gemini(prompt):
-    if not gemini_client: return None, "Gemini client not initialized (Key missing)."
-    for model_name in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"]:
+    if not gemini_client: return None, "Gemini Key Missing"
+    for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
         try:
-            response = gemini_client.models.generate_content(model=model_name, contents=prompt)
-            return response.text, None
+            res = gemini_client.models.generate_content(model=model, contents=prompt)
+            if res.text and res.text.strip() != "":
+                return res.text.strip(), None
         except Exception as e:
-            if "404" in str(e): continue
-            if "429" in str(e) or "quota" in str(e).lower(): return None, "Gemini API Rate Limit Reached (15 RPM)."
-            return None, f"Gemini Error: {e}"
-    return None, "Gemini models unavailable."
+            if "429" in str(e) or "quota" in str(e).lower(): return None, "Gemini Rate Limit"
+            pass
+    return None, "Gemini Models Failed"
 
 def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     sym = candidate["Symbol"]
@@ -321,34 +320,34 @@ def run_four_agent_dossier(candidate, strategy_type="core", active_ai=None):
     {agent_instructions}
     """
     
-    # 1. Primary AI Execution
-    result = None
-    error_msg = ""
-    
-    if active_ai == "Gemini (Google)": result, error_msg = call_gemini(master_prompt)
-    elif active_ai == "OpenRouter (DeepSeek / Llama)": result, error_msg = call_openrouter(master_prompt)
-    elif active_ai == "Grok (xAI)": result, error_msg = call_grok(master_prompt)
-    
-    if result:
-        return {"full_dossier": result}
+    # Establish priority order based on user selection
+    ai_cascade_order = []
+    if active_ai == "OpenRouter (Llama / Gemma)": 
+        ai_cascade_order = [call_openrouter, call_grok, call_gemini]
+    elif active_ai == "Grok (xAI)": 
+        ai_cascade_order = [call_grok, call_openrouter, call_gemini]
+    elif active_ai == "Gemini (Google)": 
+        ai_cascade_order = [call_gemini, call_openrouter, call_grok]
+    else:
+        ai_cascade_order = [call_openrouter, call_grok, call_gemini]
 
-    # 2. Cross-Provider Diagnostic Fallback
-    fallback_log = f"**Primary AI ({active_ai}) Failed:**\n{error_msg}\n\n"
+    error_logs = []
     
-    if active_ai == "Gemini (Google)":
-        # Silently try OpenRouter
-        backup_res, backup_err = call_openrouter(master_prompt)
-        if backup_res: return {"full_dossier": f"{backup_res}\n\n*(Note: Generated via OpenRouter due to Gemini limits)*"}
-        fallback_log += f"**OpenRouter Fallback Failed:**\n{backup_err}\n\n"
+    # The Brute-Force Loop: Try engines until one gives a REAL answer
+    for index, engine in enumerate(ai_cascade_order):
+        result, err = engine(master_prompt)
         
-        # Silently try Grok
-        backup_res2, backup_err2 = call_grok(master_prompt)
-        if backup_res2: return {"full_dossier": f"{backup_res2}\n\n*(Note: Generated via Grok due to Gemini limits)*"}
-        fallback_log += f"**Grok Fallback Failed:**\n{backup_err2}"
-        
-        return {"full_dossier": fallback_log}
-        
-    return {"full_dossier": f"**API Connection Error:**\n{error_msg}"}
+        if result:
+            note = ""
+            if index > 0: # If it wasn't the first choice, add a small note
+                note = f"\n\n*(Note: Primary AI failed. Automatically routed to backup AI engine.)*"
+            return {"full_dossier": result + note}
+            
+        if err:
+            error_logs.append(err)
+            
+    # If it reached here, every single API completely failed
+    return {"full_dossier": f"**API Connection Error:** All AI Engines Failed.\nDiagnostics: {', '.join(error_logs)}"}
 
 # =========================================================
 # 5. PDF DOSSIER GENERATOR 
