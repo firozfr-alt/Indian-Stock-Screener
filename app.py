@@ -238,8 +238,13 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     {agent_instructions}
     """
     
-    # Google's most reliable and generous free-tier models 
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    # NEW FIX: Upgraded to Google's active, lightning-fast Gemini 3 generation models.
+    models_to_try = [
+        "gemini-3.6-flash", 
+        "gemini-3.5-flash", 
+        "gemini-3.5-flash-lite", 
+        "gemini-3.1-flash-lite"
+    ]
     
     # Deep Retry System: It will attempt to get a response 3 times per model
     for model_name in models_to_try:
