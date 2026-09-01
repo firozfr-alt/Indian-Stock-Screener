@@ -40,12 +40,12 @@ def fetch_market_sentiment():
     try:
         # Primary: Pull raw Nifty 50 index
         nifty = yf.Ticker("^NSEI")
-        hist = nifty.history(period="6m")
+        hist = nifty.history(period="6mo") # FIXED: "6mo" instead of "6m"
         
         # Fallback: Pull NIFTYBEES ETF if cloud IP is blocked by Yahoo Finance on raw index
         if hist.empty or len(hist) < 22:
             nifty = yf.Ticker("NIFTYBEES.NS")
-            hist = nifty.history(period="6m")
+            hist = nifty.history(period="6mo") # FIXED: "6mo" instead of "6m"
             
         if hist.empty or len(hist) < 22:
             return "Market data feed temporarily unavailable from upstream exchange servers."
@@ -297,8 +297,8 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     """
     
     models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-1.5-flash"
+        "gemini-3.5-flash",
+        "gemini-2.5-flash"
     ]
     
     for model_name in models_to_try:
