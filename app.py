@@ -40,12 +40,12 @@ def fetch_market_sentiment():
     try:
         # Primary: Pull raw Nifty 50 index
         nifty = yf.Ticker("^NSEI")
-        hist = nifty.history(period="6mo") # FIXED: "6mo" instead of "6m"
+        hist = nifty.history(period="6mo")
         
         # Fallback: Pull NIFTYBEES ETF if cloud IP is blocked by Yahoo Finance on raw index
         if hist.empty or len(hist) < 22:
             nifty = yf.Ticker("NIFTYBEES.NS")
-            hist = nifty.history(period="6mo") # FIXED: "6mo" instead of "6m"
+            hist = nifty.history(period="6mo")
             
         if hist.empty or len(hist) < 22:
             return "Market data feed temporarily unavailable from upstream exchange servers."
@@ -68,10 +68,12 @@ def fetch_market_sentiment():
         Do not use markdown bolding, headers, or bullet points. Keep it professional and direct.
         """
         
-        response = ai_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+        # FIXED: Upgraded to the active gemini-3.5-flash model
+        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
         return response.text.strip()
-    except Exception:
-        return "Nifty 50 momentum data is currently updating. Pipeline scans remain fully operational."
+    except Exception as e:
+        # Expose the actual error so it doesn't fail silently
+        return f"Nifty 50 API Error: {str(e)}. Pipeline scans remain fully operational."
 
 with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
     with st.spinner("Analyzing benchmark momentum..."):
@@ -297,8 +299,10 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     """
     
     models_to_try = [
-        "gemini-3.5-flash",
-        "gemini-2.5-flash"
+        "gemini-3.6-flash", 
+        "gemini-3.5-flash", 
+        "gemini-3.5-flash-lite", 
+        "gemini-3.1-flash-lite"
     ]
     
     for model_name in models_to_try:
