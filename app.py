@@ -30,7 +30,7 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH NIFTYBEES FALLBACK)
+# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH NIFTYBEES FALLBACK & RETRIES)
 # =========================================================
 @st.cache_data(ttl=3600)
 def fetch_market_sentiment():
@@ -68,12 +68,28 @@ def fetch_market_sentiment():
         Do not use markdown bolding, headers, or bullet points. Keep it professional and direct.
         """
         
-        # FIXED: Upgraded to the active gemini-3.5-flash model
-        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
-        return response.text.strip()
+        # NEW FIX: Added Fortress Retry Logic specifically to catch 503 Server Overloads
+        models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+        
+        for model_name in models_to_try:
+            for attempt in range(3):
+                try:
+                    response = ai_client.models.generate_content(model=model_name, contents=prompt)
+                    if response.text:
+                        return response.text.strip()
+                except Exception as api_e:
+                    error_str = str(api_e).lower()
+                    # Catch 503 (Unavailable) and 429 (Rate Limit) to retry automatically
+                    if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
+                        time.sleep(5)
+                        continue
+                    else:
+                        break # Break attempt loop, try next model
+                        
+        return "Market sentiment summary is currently unavailable due to high AI server demand (503). Pipeline scans remain fully operational."
+        
     except Exception as e:
-        # Expose the actual error so it doesn't fail silently
-        return f"Nifty 50 API Error: {str(e)}. Pipeline scans remain fully operational."
+        return f"Nifty 50 Logic Error: {str(e)}. Pipeline scans remain fully operational."
 
 with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
     with st.spinner("Analyzing benchmark momentum..."):
@@ -314,7 +330,8 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
                     return {"full_dossier": response.text.strip()}
             except Exception as e:
                 error_str = str(e).lower()
-                if "429" in error_str or "quota" in error_str or "rate limit" in error_str:
+                # Expanded to explicitly catch 503 errors and unavailable statuses here as well
+                if "429" in error_str or "quota" in error_str or "rate limit" in error_str or "503" in error_str or "unavailable" in error_str:
                     time.sleep(20)
                     continue
                 elif "404" in error_str or "400" in error_str or "not found" in error_str:
@@ -322,7 +339,7 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
                 else:
                     break
                     
-    return {"full_dossier": "Gemini API rate limits reached across retries. Deterministic quantitative scores remain fully verified."}
+    return {"full_dossier": "Gemini API servers are overloaded (503/429) across retries. Deterministic quantitative scores remain fully verified."}
 
 # =========================================================
 # 6. PDF DOSSIER GENERATOR
