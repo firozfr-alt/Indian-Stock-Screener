@@ -30,7 +30,7 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH NIFTYBEES FALLBACK & RETRIES)
+# 2. LIVE MARKET SENTIMENT OVERVIEW (DETAILED TECHNICALS)
 # =========================================================
 @st.cache_data(ttl=3600)
 def fetch_market_sentiment():
@@ -58,17 +58,20 @@ def fetch_market_sentiment():
         
         prompt = f"""
         You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
-        The benchmark Nifty 50 is trading with the following technical data:
+        The benchmark Nifty 50 is currently trading at {current_price:.2f}.
+        Technical data:
         - 1-Month Momentum: {ret_1m:.2f}%
         - 6-Month Momentum: {ret_6m:.2f}%
         - Quantitative Trend: {market_trend}
         
-        Write a concise, 3-sentence market sentiment briefing based purely on these figures. 
-        Cover institutional risk appetite, momentum stability, and deployment posture. 
-        Do not use markdown bolding, headers, or bullet points. Keep it professional and direct.
+        Write an institutional market sentiment briefing. Structure your response EXACTLY into these three short sections using standard bullet points:
+        **1. Trend Confirmation:** Assess current momentum, moving average trajectory, and institutional posture.
+        **2. The Upside (Resistance):** Identify immediate resistance and breakout levels relative to the current price of {current_price:.2f}.
+        **3. The Downside (Support):** Identify immediate support cushions and risk levels relative to {current_price:.2f}.
+        
+        Keep it highly professional, analytical, and direct.
         """
         
-        # NEW FIX: Added Fortress Retry Logic specifically to catch 503 Server Overloads
         models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
         
         for model_name in models_to_try:
@@ -79,12 +82,11 @@ def fetch_market_sentiment():
                         return response.text.strip()
                 except Exception as api_e:
                     error_str = str(api_e).lower()
-                    # Catch 503 (Unavailable) and 429 (Rate Limit) to retry automatically
                     if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
                         time.sleep(5)
                         continue
                     else:
-                        break # Break attempt loop, try next model
+                        break 
                         
         return "Market sentiment summary is currently unavailable due to high AI server demand (503). Pipeline scans remain fully operational."
         
@@ -92,9 +94,9 @@ def fetch_market_sentiment():
         return f"Nifty 50 Logic Error: {str(e)}. Pipeline scans remain fully operational."
 
 with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
-    with st.spinner("Analyzing benchmark momentum..."):
+    with st.spinner("Analyzing benchmark momentum and technical levels..."):
         sentiment_text = fetch_market_sentiment()
-        st.info(sentiment_text)
+        st.markdown(sentiment_text) # Upgraded to markdown so bolding and bullets render properly
 
 # =========================================================
 # 3. DEFINED UNIVERSES PER STRATEGY
@@ -330,7 +332,6 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
                     return {"full_dossier": response.text.strip()}
             except Exception as e:
                 error_str = str(e).lower()
-                # Expanded to explicitly catch 503 errors and unavailable statuses here as well
                 if "429" in error_str or "quota" in error_str or "rate limit" in error_str or "503" in error_str or "unavailable" in error_str:
                     time.sleep(20)
                     continue
