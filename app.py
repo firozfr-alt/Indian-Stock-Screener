@@ -30,25 +30,41 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW (DETAILED TECHNICALS)
+# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH DYNAMIC PRICE HEADER)
 # =========================================================
 @st.cache_data(ttl=3600)
 def fetch_market_sentiment():
     if not ai_client:
-        return "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
+        return {
+            "price": 0.0,
+            "ret_1m": 0.0,
+            "ret_6m": 0.0,
+            "trend": "Offline",
+            "is_etf": False,
+            "sentiment": "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
+        }
         
     try:
         # Primary: Pull raw Nifty 50 index
         nifty = yf.Ticker("^NSEI")
         hist = nifty.history(period="6mo")
+        is_etf = False
         
         # Fallback: Pull NIFTYBEES ETF if cloud IP is blocked by Yahoo Finance on raw index
         if hist.empty or len(hist) < 22:
             nifty = yf.Ticker("NIFTYBEES.NS")
             hist = nifty.history(period="6mo")
+            is_etf = True
             
         if hist.empty or len(hist) < 22:
-            return "Market data feed temporarily unavailable from upstream exchange servers."
+            return {
+                "price": 0.0,
+                "ret_1m": 0.0,
+                "ret_6m": 0.0,
+                "trend": "Unavailable",
+                "is_etf": False,
+                "sentiment": "Market data feed temporarily unavailable from upstream exchange servers."
+            }
             
         current_price = float(hist['Close'].iloc[-1])
         ret_1m = float(((current_price - hist['Close'].iloc[-22]) / hist['Close'].iloc[-22]) * 100)
@@ -73,30 +89,66 @@ def fetch_market_sentiment():
         """
         
         models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+        sentiment_response = "Market sentiment summary is currently unavailable due to high AI server demand (503). Pipeline scans remain fully operational."
         
         for model_name in models_to_try:
+            success = False
             for attempt in range(3):
                 try:
                     response = ai_client.models.generate_content(model=model_name, contents=prompt)
                     if response.text:
-                        return response.text.strip()
+                        sentiment_response = response.text.strip()
+                        success = True
+                        break
                 except Exception as api_e:
                     error_str = str(api_e).lower()
                     if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
                         time.sleep(5)
                         continue
                     else:
-                        break 
-                        
-        return "Market sentiment summary is currently unavailable due to high AI server demand (503). Pipeline scans remain fully operational."
+                        break
+            if success:
+                break
+                
+        return {
+            "price": current_price,
+            "ret_1m": ret_1m,
+            "ret_6m": ret_6m,
+            "trend": market_trend,
+            "is_etf": is_etf,
+            "sentiment": sentiment_response
+        }
         
     except Exception as e:
-        return f"Nifty 50 Logic Error: {str(e)}. Pipeline scans remain fully operational."
+        return {
+            "price": 0.0,
+            "ret_1m": 0.0,
+            "ret_6m": 0.0,
+            "trend": "Error",
+            "is_etf": False,
+            "sentiment": f"Nifty 50 Logic Error: {str(e)}. Pipeline scans remain fully operational."
+        }
 
-with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
-    with st.spinner("Analyzing benchmark momentum and technical levels..."):
-        sentiment_text = fetch_market_sentiment()
-        st.markdown(sentiment_text) # Upgraded to markdown so bolding and bullets render properly
+# Fetch data first so price can be embedded into the expander title
+market_data = fetch_market_sentiment()
+
+if market_data.get("price", 0.0) > 0:
+    prefix = "Nifty BeES: " if market_data.get("is_etf") else "Nifty 50: "
+    header_title = f"📊 Current Indian Market Sentiment ({prefix}₹{market_data['price']:,.2f} | {market_data['ret_1m']:+.2f}%)"
+else:
+    header_title = "📊 Current Indian Market Sentiment (Nifty 50)"
+
+with st.expander(header_title, expanded=True):
+    if market_data.get("price", 0.0) > 0:
+        m1, m2, m3, m4 = st.columns(4)
+        price_label = "Nifty 50 (Proxy ETF)" if market_data.get("is_etf") else "Nifty 50 Current Price"
+        m1.metric(price_label, f"₹{market_data['price']:,.2f}")
+        m2.metric("1-Month Momentum", f"{market_data['ret_1m']:+.2f}%")
+        m3.metric("6-Month Momentum", f"{market_data['ret_6m']:+.2f}%")
+        m4.metric("Quant Trend", market_data['trend'])
+        st.divider()
+        
+    st.markdown(market_data.get("sentiment", ""))
 
 # =========================================================
 # 3. DEFINED UNIVERSES PER STRATEGY
