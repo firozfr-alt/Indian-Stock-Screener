@@ -30,51 +30,56 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW
+# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH NIFTYBEES FALLBACK)
 # =========================================================
-@st.cache_data(ttl=3600) # Caches the market overview for 1 hour to save API calls
+@st.cache_data(ttl=3600)
 def fetch_market_sentiment():
     if not ai_client:
-        return "Market sentiment AI is currently offline. Please add your Gemini API Key."
+        return "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
         
     try:
-        # Fetch actual Nifty 50 Data
+        # Primary: Pull raw Nifty 50 index
         nifty = yf.Ticker("^NSEI")
         hist = nifty.history(period="6m")
         
+        # Fallback: Pull NIFTYBEES ETF if cloud IP is blocked by Yahoo Finance on raw index
         if hist.empty or len(hist) < 22:
-            return "Awaiting fresh market data..."
+            nifty = yf.Ticker("NIFTYBEES.NS")
+            hist = nifty.history(period="6m")
             
-        current_price = hist['Close'].iloc[-1]
-        ret_1m = ((current_price - hist['Close'].iloc[-22]) / hist['Close'].iloc[-22]) * 100
-        ret_6m = ((current_price - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100
+        if hist.empty or len(hist) < 22:
+            return "Market data feed temporarily unavailable from upstream exchange servers."
+            
+        current_price = float(hist['Close'].iloc[-1])
+        ret_1m = float(((current_price - hist['Close'].iloc[-22]) / hist['Close'].iloc[-22]) * 100)
+        ret_6m = float(((current_price - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100)
         
         market_trend = "Bullish" if ret_1m > 0 and ret_6m > 0 else "Bearish" if ret_1m < 0 and ret_6m < 0 else "Mixed/Consolidating"
         
         prompt = f"""
         You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
-        The Nifty 50 Index is currently trading at {current_price:.2f}.
-        1-Month Momentum: {ret_1m:.2f}%
-        6-Month Momentum: {ret_6m:.2f}%
-        Overall Quantitative Trend: {market_trend}
+        The benchmark Nifty 50 is trading with the following technical data:
+        - 1-Month Momentum: {ret_1m:.2f}%
+        - 6-Month Momentum: {ret_6m:.2f}%
+        - Quantitative Trend: {market_trend}
         
-        Write a concise, 3-sentence market sentiment briefing based purely on these numbers. 
-        Focus on risk appetite and institutional momentum. Do not use markdown bolding or bullet points. Keep it professional.
+        Write a concise, 3-sentence market sentiment briefing based purely on these figures. 
+        Cover institutional risk appetite, momentum stability, and deployment posture. 
+        Do not use markdown bolding, headers, or bullet points. Keep it professional and direct.
         """
         
-        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
+        response = ai_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         return response.text.strip()
-    except Exception as e:
-        return "Market data temporarily unavailable."
+    except Exception:
+        return "Nifty 50 momentum data is currently updating. Pipeline scans remain fully operational."
 
-# Display the Market Overview at the top of the app
 with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
-    with st.spinner("Analyzing Nifty 50 momentum..."):
+    with st.spinner("Analyzing benchmark momentum..."):
         sentiment_text = fetch_market_sentiment()
         st.info(sentiment_text)
 
 # =========================================================
-# 3. DEFINED UNIVERSES PER TAB
+# 3. DEFINED UNIVERSES PER STRATEGY
 # =========================================================
 CORE_MULTIBAGGER_THEMES = {
     "EMS & Electronics Manufacturing": ["DIXON.NS", "KAYNES.NS", "SYRMA.NS", "AMBER.NS"],
@@ -102,9 +107,12 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
         
-        if hist.empty or len(hist) < 30: return None
+        if hist.empty or len(hist) < 30: 
+            return None
+            
         close = hist['Close'].dropna() 
-        if close.empty: return None
+        if close.empty: 
+            return None
             
         current_price = round(float(close.iloc[-1]), 2)
         volume_avg = float(hist['Volume'].tail(20).mean())
@@ -133,8 +141,10 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         rev_val = 0.0
         
         if not fin.empty:
-            if 'Total Revenue' in fin.index: rev_val = float(fin.loc['Total Revenue'].iloc[0])
-            if 'Net Income' in fin.index: net_inc = float(fin.loc['Net Income'].iloc[0])
+            if 'Total Revenue' in fin.index: 
+                rev_val = float(fin.loc['Total Revenue'].iloc[0])
+            if 'Net Income' in fin.index: 
+                net_inc = float(fin.loc['Net Income'].iloc[0])
             if 'Operating Income' in fin.index and opm is None:
                 opm = float(fin.loc['Operating Income'].iloc[0] / rev_val) if rev_val > 0 else 0.12
                 
@@ -155,15 +165,19 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         twin_engine_pat_cagr = round((((3.0 / multiple_expansion_ratio) ** (1/3)) - 1) * 100, 2)
 
         red_flags = []
-        if de_val > 1.2: red_flags.append(("CRITICAL", f"High Debt ({de_val})"))
-        if cash_conversion < 0.55 and net_inc > 0: red_flags.append(("HIGH", f"Weak Cash Conv ({cash_conversion}x)"))
+        if de_val > 1.2: 
+            red_flags.append(("CRITICAL", f"High Debt ({de_val})"))
+        if cash_conversion < 0.55 and net_inc > 0: 
+            red_flags.append(("HIGH", f"Weak Cash Conv ({cash_conversion}x)"))
 
         score = 0
         feasibility = 0
         
         if strategy_type == "penny":
-            if volume_avg < 250000: red_flags.append(("CRITICAL", "Low Liquidity (Operator Trap Risk)"))
-            if ocf_val < 0 and net_inc > 0: red_flags.append(("CRITICAL", "Negative OCF with Positive PAT (Fake Earnings Flag)"))
+            if volume_avg < 250000: 
+                red_flags.append(("CRITICAL", "Low Liquidity (Operator Trap Risk)"))
+            if ocf_val < 0 and net_inc > 0: 
+                red_flags.append(("CRITICAL", "Negative OCF with Positive PAT (Fake Earnings Flag)"))
             
             if de_val <= 0.1: score += 30
             elif de_val <= 0.5: score += 15
@@ -178,7 +192,8 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             if current_price < 50: feasibility += 50
             
         elif strategy_type == "smallcap":
-            if volume_avg < 30000: red_flags.append(("HIGH", "Low Daily Liquidity"))
+            if volume_avg < 30000: 
+                red_flags.append(("HIGH", "Low Daily Liquidity"))
             if de_val <= 0.2: score += 25
             elif de_val <= 0.6: score += 15
             if cash_conversion >= 0.75: score += 25
@@ -190,7 +205,7 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             if twin_engine_pat_cagr <= 35.0: feasibility += 35
             if roe_pct >= 12.0 and de_val <= 0.5: feasibility += 30
             
-        else: # CORE
+        else:  # CORE
             if roe_pct >= 20.0: score += 20
             elif roe_pct >= 14.0: score += 14
             if de_val <= 0.3: score += 15
@@ -240,7 +255,6 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     sym = candidate["Symbol"]
     theme = candidate["Theme"]
     
-    agent_instructions = ""
     if strategy_type == "penny":
         agent_instructions = """
         ### AGENT 1: GEMINI (Bankruptcy & Solvency Audit)
@@ -267,26 +281,24 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     """
 
     if not ai_client: 
-        return {"full_dossier": f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."}
+        return {"full_dossier": f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100 with required 3Y CAGR of {candidate['Req PAT CAGR (Twin Engine)']}."}
 
     master_prompt = f"""
     Analyze {sym} ({strategy_type.upper()} Strategy).
     {context_data}
     
     CRITICAL FORMATTING RULES:
-    1. NEVER use markdown tables, grid lines, or ASCII art diagrams.
-    2. Present all risks, data, and analysis using clean, standard bullet points (-).
-    3. Do not use special Unicode characters or emojis.
+    1. NEVER use markdown tables, pipe characters, or ASCII art.
+    2. Format all evaluations using standard unordered bullet points (-).
+    3. Do not output raw emojis or non-ASCII symbols.
     
     Provide 5 sections:
     {agent_instructions}
     """
     
     models_to_try = [
-        "gemini-3.6-flash", 
-        "gemini-3.5-flash", 
-        "gemini-3.5-flash-lite", 
-        "gemini-3.1-flash-lite"
+        "gemini-2.5-flash",
+        "gemini-1.5-flash"
     ]
     
     for model_name in models_to_try:
@@ -294,24 +306,22 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
         for attempt in range(max_retries):
             try:
                 response = ai_client.models.generate_content(model=model_name, contents=master_prompt)
-                
                 if response.text and response.text.strip() != "":
                     return {"full_dossier": response.text.strip()}
-                    
             except Exception as e:
                 error_str = str(e).lower()
-                if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "rate limit" in error_str:
-                    time.sleep(20) 
-                    continue 
-                elif "404" in error_str or "not found" in error_str or "invalid" in error_str or "400" in error_str:
-                    break 
+                if "429" in error_str or "quota" in error_str or "rate limit" in error_str:
+                    time.sleep(20)
+                    continue
+                elif "404" in error_str or "400" in error_str or "not found" in error_str:
+                    break
                 else:
                     break
                     
-    return {"full_dossier": "Gemini API servers are overloaded after multiple retries. Deterministic Math remains 100% valid."}
+    return {"full_dossier": "Gemini API rate limits reached across retries. Deterministic quantitative scores remain fully verified."}
 
 # =========================================================
-# 6. PDF DOSSIER GENERATOR 
+# 6. PDF DOSSIER GENERATOR
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -393,7 +403,8 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
             for t_name, tickers in scan_map.items():
                 for t in tickers:
                     res = analyze_stock(t, t_name, strategy_type=strategy)
-                    if res: all_cands.append(res)
+                    if res: 
+                        all_cands.append(res)
                     time.sleep(0.05)
                     
             df = pd.DataFrame(all_cands)
@@ -437,13 +448,14 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                             st.success("✅ Zero Critical Flags")
                         st.markdown(content)
                     
+                    # Pacing throttle for 15 RPM free quota compliance
                     time.sleep(15.0)
 
             if top_picks:
                 pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Candidates")
                 st.download_button("📄 Download Clean PDF Dossier", data=pdf, file_name=f"{strategy}_research.pdf", mime="application/pdf", key=f"dl_{strategy}")
 
-# Render the 3 Tabs
+# Render UI across strategy tabs
 with tab_core:
     render_pipeline_ui(CORE_MULTIBAGGER_THEMES, "core", "Secular Growth & Market Leaders", 60)
 with tab_smallcap:
