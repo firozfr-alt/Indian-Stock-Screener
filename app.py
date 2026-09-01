@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("🏛️ Institutional Indian Equity Screener")
-st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks (Powered exclusively by Google Gemini)")
+st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks (Powered by Google Gemini)")
 
 # =========================================================
 # 1. GEMINI AI INITIALIZATION
@@ -30,7 +30,51 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. DEFINED UNIVERSES PER TAB
+# 2. LIVE MARKET SENTIMENT OVERVIEW
+# =========================================================
+@st.cache_data(ttl=3600) # Caches the market overview for 1 hour to save API calls
+def fetch_market_sentiment():
+    if not ai_client:
+        return "Market sentiment AI is currently offline. Please add your Gemini API Key."
+        
+    try:
+        # Fetch actual Nifty 50 Data
+        nifty = yf.Ticker("^NSEI")
+        hist = nifty.history(period="6m")
+        
+        if hist.empty or len(hist) < 22:
+            return "Awaiting fresh market data..."
+            
+        current_price = hist['Close'].iloc[-1]
+        ret_1m = ((current_price - hist['Close'].iloc[-22]) / hist['Close'].iloc[-22]) * 100
+        ret_6m = ((current_price - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100
+        
+        market_trend = "Bullish" if ret_1m > 0 and ret_6m > 0 else "Bearish" if ret_1m < 0 and ret_6m < 0 else "Mixed/Consolidating"
+        
+        prompt = f"""
+        You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
+        The Nifty 50 Index is currently trading at {current_price:.2f}.
+        1-Month Momentum: {ret_1m:.2f}%
+        6-Month Momentum: {ret_6m:.2f}%
+        Overall Quantitative Trend: {market_trend}
+        
+        Write a concise, 3-sentence market sentiment briefing based purely on these numbers. 
+        Focus on risk appetite and institutional momentum. Do not use markdown bolding or bullet points. Keep it professional.
+        """
+        
+        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        return "Market data temporarily unavailable."
+
+# Display the Market Overview at the top of the app
+with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
+    with st.spinner("Analyzing Nifty 50 momentum..."):
+        sentiment_text = fetch_market_sentiment()
+        st.info(sentiment_text)
+
+# =========================================================
+# 3. DEFINED UNIVERSES PER TAB
 # =========================================================
 CORE_MULTIBAGGER_THEMES = {
     "EMS & Electronics Manufacturing": ["DIXON.NS", "KAYNES.NS", "SYRMA.NS", "AMBER.NS"],
@@ -50,7 +94,7 @@ PENNY_MICRO_THEMES = {
 }
 
 # =========================================================
-# 3. DETERMINISTIC QUANT & FORENSIC AUDIT ENGINE
+# 4. DETERMINISTIC QUANT & FORENSIC AUDIT ENGINE
 # =========================================================
 @st.cache_data(ttl=1800)
 def analyze_stock(ticker, theme, strategy_type="core"):
@@ -190,7 +234,7 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 4. GEMINI FORTRESS RETRY ENGINE
+# 5. GEMINI FORTRESS RETRY ENGINE
 # =========================================================
 def run_four_agent_dossier(candidate, strategy_type="core"):
     sym = candidate["Symbol"]
@@ -238,7 +282,6 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     {agent_instructions}
     """
     
-    # NEW FIX: Upgraded to Google's active, lightning-fast Gemini 3 generation models.
     models_to_try = [
         "gemini-3.6-flash", 
         "gemini-3.5-flash", 
@@ -246,7 +289,6 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
         "gemini-3.1-flash-lite"
     ]
     
-    # Deep Retry System: It will attempt to get a response 3 times per model
     for model_name in models_to_try:
         max_retries = 3
         for attempt in range(max_retries):
@@ -258,26 +300,18 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
                     
             except Exception as e:
                 error_str = str(e).lower()
-                
-                # 1. CATCH RATE LIMITS (429) -> Pause and try this exactly model again
                 if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "rate limit" in error_str:
-                    time.sleep(20) # A full 20-second pause resets Google's internal RPM tracker
+                    time.sleep(20) 
                     continue 
-                    
-                # 2. CATCH DEAD MODELS (404/400) -> Break the inner loop, move to the next model
                 elif "404" in error_str or "not found" in error_str or "invalid" in error_str or "400" in error_str:
                     break 
-                    
-                # 3. CATCH SAFETY BLOCKS / OTHER -> Move to next model
                 else:
                     break
                     
-    # If the code reaches this line, every model failed all its retries (Extremely Rare)
     return {"full_dossier": "Gemini API servers are overloaded after multiple retries. Deterministic Math remains 100% valid."}
 
-
 # =========================================================
-# 5. PDF DOSSIER GENERATOR 
+# 6. PDF DOSSIER GENERATOR 
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -342,7 +376,7 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
     return bytes(pdf.output())
 
 # =========================================================
-# 6. TRI-TAB UI WORKFLOW 
+# 7. TRI-TAB UI WORKFLOW 
 # =========================================================
 tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Core Compounders", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
 
@@ -403,7 +437,6 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                             st.success("✅ Zero Critical Flags")
                         st.markdown(content)
                     
-                    # PACE MAKER: A strict 15-second gap between successful stocks keeps you safely under the 15 RPM limit 
                     time.sleep(15.0)
 
             if top_picks:
