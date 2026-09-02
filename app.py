@@ -30,13 +30,15 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH DYNAMIC PRICE HEADER)
+# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH DAILY DELTA)
 # =========================================================
 @st.cache_data(ttl=3600)
 def fetch_market_sentiment():
     if not ai_client:
         return {
             "price": 0.0,
+            "daily_pts": 0.0,
+            "daily_pct": 0.0,
             "ret_1m": 0.0,
             "ret_6m": 0.0,
             "trend": "Offline",
@@ -59,6 +61,8 @@ def fetch_market_sentiment():
         if hist.empty or len(hist) < 22:
             return {
                 "price": 0.0,
+                "daily_pts": 0.0,
+                "daily_pct": 0.0,
                 "ret_1m": 0.0,
                 "ret_6m": 0.0,
                 "trend": "Unavailable",
@@ -67,6 +71,12 @@ def fetch_market_sentiment():
             }
             
         current_price = float(hist['Close'].iloc[-1])
+        
+        # Calculate daily points and percentage change (Intraday Delta)
+        prev_price = float(hist['Close'].iloc[-2])
+        daily_change_pts = current_price - prev_price
+        daily_change_pct = (daily_change_pts / prev_price) * 100
+        
         ret_1m = float(((current_price - hist['Close'].iloc[-22]) / hist['Close'].iloc[-22]) * 100)
         ret_6m = float(((current_price - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100)
         
@@ -76,6 +86,7 @@ def fetch_market_sentiment():
         You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
         The benchmark Nifty 50 is currently trading at {current_price:.2f}.
         Technical data:
+        - Daily Delta: {daily_change_pts:+.2f} pts ({daily_change_pct:+.2f}%)
         - 1-Month Momentum: {ret_1m:.2f}%
         - 6-Month Momentum: {ret_6m:.2f}%
         - Quantitative Trend: {market_trend}
@@ -112,6 +123,8 @@ def fetch_market_sentiment():
                 
         return {
             "price": current_price,
+            "daily_pts": daily_change_pts,
+            "daily_pct": daily_change_pct,
             "ret_1m": ret_1m,
             "ret_6m": ret_6m,
             "trend": market_trend,
@@ -122,6 +135,8 @@ def fetch_market_sentiment():
     except Exception as e:
         return {
             "price": 0.0,
+            "daily_pts": 0.0,
+            "daily_pct": 0.0,
             "ret_1m": 0.0,
             "ret_6m": 0.0,
             "trend": "Error",
@@ -134,7 +149,7 @@ market_data = fetch_market_sentiment()
 
 if market_data.get("price", 0.0) > 0:
     prefix = "Nifty BeES: " if market_data.get("is_etf") else "Nifty 50: "
-    header_title = f"📊 Current Indian Market Sentiment ({prefix}₹{market_data['price']:,.2f} | {market_data['ret_1m']:+.2f}%)"
+    header_title = f"📊 Current Indian Market Sentiment ({prefix}₹{market_data['price']:,.2f} | {market_data['daily_pts']:+,.2f} pts / {market_data['daily_pct']:+.2f}%)"
 else:
     header_title = "📊 Current Indian Market Sentiment (Nifty 50)"
 
@@ -142,7 +157,10 @@ with st.expander(header_title, expanded=True):
     if market_data.get("price", 0.0) > 0:
         m1, m2, m3, m4 = st.columns(4)
         price_label = "Nifty 50 (Proxy ETF)" if market_data.get("is_etf") else "Nifty 50 Current Price"
-        m1.metric(price_label, f"₹{market_data['price']:,.2f}")
+        
+        delta_str = f"{market_data['daily_pts']:+,.2f} ({market_data['daily_pct']:+.2f}%)"
+        
+        m1.metric(price_label, f"₹{market_data['price']:,.2f}", delta=delta_str)
         m2.metric("1-Month Momentum", f"{market_data['ret_1m']:+.2f}%")
         m3.metric("6-Month Momentum", f"{market_data['ret_6m']:+.2f}%")
         m4.metric("Quant Trend", market_data['trend'])
