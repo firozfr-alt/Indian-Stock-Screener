@@ -30,50 +30,43 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH DAILY DELTA)
+# 2. LIVE MARKET DATA & SENTIMENT (DECOUPLED CACHE)
 # =========================================================
-@st.cache_data(ttl=3600)
-def fetch_market_sentiment():
-    if not ai_client:
-        return {
-            "price": 0.0,
-            "daily_pts": 0.0,
-            "daily_pct": 0.0,
-            "ret_1m": 0.0,
-            "ret_6m": 0.0,
-            "trend": "Offline",
-            "is_etf": False,
-            "sentiment": "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
-        }
-        
+@st.cache_data(ttl=60)  # Refreshes price every 60 seconds
+def fetch_market_data():
     try:
-        # Primary: Pull raw Nifty 50 index
         nifty = yf.Ticker("^NSEI")
+        
+        # 1. Trailing 6 months of daily data for momentum math
         hist = nifty.history(period="6mo")
         is_etf = False
         
-        # Fallback: Pull NIFTYBEES ETF if cloud IP is blocked by Yahoo Finance on raw index
+        # Fallback to ETF if cloud IP is blocked on index ticker
         if hist.empty or len(hist) < 22:
             nifty = yf.Ticker("NIFTYBEES.NS")
             hist = nifty.history(period="6mo")
             is_etf = True
             
         if hist.empty or len(hist) < 22:
-            return {
-                "price": 0.0,
-                "daily_pts": 0.0,
-                "daily_pct": 0.0,
-                "ret_1m": 0.0,
-                "ret_6m": 0.0,
-                "trend": "Unavailable",
-                "is_etf": False,
-                "sentiment": "Market data feed temporarily unavailable from upstream exchange servers."
-            }
+            return None
             
-        current_price = float(hist['Close'].iloc[-1])
-        
-        # Calculate daily points and percentage change (Intraday Delta)
-        prev_price = float(hist['Close'].iloc[-2])
+        # 2. Pull intraday 2-minute candles for true live price
+        live_hist = nifty.history(period="1d", interval="2m")
+        if not live_hist.empty:
+            current_price = float(live_hist['Close'].iloc[-1])
+        else:
+            current_price = float(hist['Close'].iloc[-1])
+            
+        # 3. Calculate daily delta against prior close
+        prev_close_info = nifty.info.get('previousClose')
+        if prev_close_info is not None and prev_close_info > 0:
+            prev_price = float(prev_close_info)
+        else:
+            if not live_hist.empty and live_hist.index[-1].date() > hist.index[-1].date():
+                prev_price = float(hist['Close'].iloc[-1])
+            else:
+                prev_price = float(hist['Close'].iloc[-2])
+            
         daily_change_pts = current_price - prev_price
         daily_change_pct = (daily_change_pts / prev_price) * 100
         
@@ -82,45 +75,6 @@ def fetch_market_sentiment():
         
         market_trend = "Bullish" if ret_1m > 0 and ret_6m > 0 else "Bearish" if ret_1m < 0 and ret_6m < 0 else "Mixed/Consolidating"
         
-        prompt = f"""
-        You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
-        The benchmark Nifty 50 is currently trading at {current_price:.2f}.
-        Technical data:
-        - Daily Delta: {daily_change_pts:+.2f} pts ({daily_change_pct:+.2f}%)
-        - 1-Month Momentum: {ret_1m:.2f}%
-        - 6-Month Momentum: {ret_6m:.2f}%
-        - Quantitative Trend: {market_trend}
-        
-        Write an institutional market sentiment briefing. Structure your response EXACTLY into these three short sections using standard bullet points:
-        **1. Trend Confirmation:** Assess current momentum, moving average trajectory, and institutional posture.
-        **2. The Upside (Resistance):** Identify immediate resistance and breakout levels relative to the current price of {current_price:.2f}.
-        **3. The Downside (Support):** Identify immediate support cushions and risk levels relative to {current_price:.2f}.
-        
-        Keep it highly professional, analytical, and direct.
-        """
-        
-        models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-        sentiment_response = "Market sentiment summary is currently unavailable due to high AI server demand (503). Pipeline scans remain fully operational."
-        
-        for model_name in models_to_try:
-            success = False
-            for attempt in range(3):
-                try:
-                    response = ai_client.models.generate_content(model=model_name, contents=prompt)
-                    if response.text:
-                        sentiment_response = response.text.strip()
-                        success = True
-                        break
-                except Exception as api_e:
-                    error_str = str(api_e).lower()
-                    if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
-                        time.sleep(5)
-                        continue
-                    else:
-                        break
-            if success:
-                break
-                
         return {
             "price": current_price,
             "daily_pts": daily_change_pts,
@@ -128,36 +82,64 @@ def fetch_market_sentiment():
             "ret_1m": ret_1m,
             "ret_6m": ret_6m,
             "trend": market_trend,
-            "is_etf": is_etf,
-            "sentiment": sentiment_response
+            "is_etf": is_etf
         }
+    except Exception:
+        return None
+
+@st.cache_data(ttl=3600)  # Caches AI synthesis for 1 hour to protect quota
+def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
+    if not ai_client:
+        return "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
         
-    except Exception as e:
-        return {
-            "price": 0.0,
-            "daily_pts": 0.0,
-            "daily_pct": 0.0,
-            "ret_1m": 0.0,
-            "ret_6m": 0.0,
-            "trend": "Error",
-            "is_etf": False,
-            "sentiment": f"Nifty 50 Logic Error: {str(e)}. Pipeline scans remain fully operational."
-        }
+    prompt = f"""
+    You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
+    The benchmark Nifty 50 is currently trading at {price:.2f}.
+    Technical data:
+    - Daily Delta: {daily_pts:+.2f} pts ({daily_pct:+.2f}%)
+    - 1-Month Momentum: {ret_1m:.2f}%
+    - 6-Month Momentum: {ret_6m:.2f}%
+    - Quantitative Trend: {trend}
+    
+    Write an institutional market sentiment briefing. Structure your response EXACTLY into these three short sections using standard bullet points:
+    **1. Trend Confirmation:** Assess current momentum, moving average trajectory, and institutional posture.
+    **2. The Upside (Resistance):** Identify immediate resistance and breakout levels relative to the current price of {price:.2f}.
+    **3. The Downside (Support):** Identify immediate support cushions and risk levels relative to {price:.2f}.
+    
+    Keep it highly professional, analytical, and direct.
+    """
+    
+    models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(model=model_name, contents=prompt)
+                if response.text:
+                    return response.text.strip()
+            except Exception as api_e:
+                error_str = str(api_e).lower()
+                if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
+                    time.sleep(5)
+                    continue
+                else:
+                    break
+                    
+    return "Market sentiment summary is currently unavailable due to high AI server demand (503). Pipeline scans remain fully operational."
 
-# Fetch data first so price can be embedded into the expander title
-market_data = fetch_market_sentiment()
+# Render Section 2 UI
+market_data = fetch_market_data()
 
-if market_data.get("price", 0.0) > 0:
+if market_data:
     prefix = "Nifty BeES: " if market_data.get("is_etf") else "Nifty 50: "
     header_title = f"📊 Current Indian Market Sentiment ({prefix}₹{market_data['price']:,.2f} | {market_data['daily_pts']:+,.2f} pts / {market_data['daily_pct']:+.2f}%)"
 else:
-    header_title = "📊 Current Indian Market Sentiment (Nifty 50)"
+    header_title = "📊 Current Indian Market Sentiment (Data Unavailable)"
 
 with st.expander(header_title, expanded=True):
-    if market_data.get("price", 0.0) > 0:
+    if market_data:
         m1, m2, m3, m4 = st.columns(4)
         price_label = "Nifty 50 (Proxy ETF)" if market_data.get("is_etf") else "Nifty 50 Current Price"
-        
         delta_str = f"{market_data['daily_pts']:+,.2f} ({market_data['daily_pct']:+.2f}%)"
         
         m1.metric(price_label, f"₹{market_data['price']:,.2f}", delta=delta_str)
@@ -166,7 +148,18 @@ with st.expander(header_title, expanded=True):
         m4.metric("Quant Trend", market_data['trend'])
         st.divider()
         
-    st.markdown(market_data.get("sentiment", ""))
+        with st.spinner("Analyzing technical levels..."):
+            ai_summary = generate_ai_sentiment(
+                market_data['price'], 
+                market_data['daily_pts'], 
+                market_data['daily_pct'], 
+                market_data['ret_1m'], 
+                market_data['ret_6m'], 
+                market_data['trend']
+            )
+            st.markdown(ai_summary)
+    else:
+        st.error("Market data feed temporarily unavailable from upstream exchange servers.")
 
 # =========================================================
 # 3. DEFINED UNIVERSES PER STRATEGY
