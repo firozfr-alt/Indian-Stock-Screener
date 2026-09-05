@@ -6,7 +6,7 @@ from google import genai
 import time
 from datetime import datetime
 from fpdf import FPDF
-import concurrent.futures  # NEW: Added for parallel speed processing
+import concurrent.futures
 
 st.set_page_config(
     page_title="AI Equity Screener",
@@ -138,12 +138,18 @@ with st.expander(header_title, expanded=True):
         m4.metric("Quant Trend", market_data['trend'])
         st.divider()
         
-        with st.spinner("Analyzing technical levels..."):
-            ai_summary = generate_ai_sentiment(
-                market_data['price'], market_data['daily_pts'], market_data['daily_pct'], 
-                market_data['ret_1m'], market_data['ret_6m'], market_data['trend']
-            )
-            st.markdown(ai_summary)
+        # FIXED: Converted to On-Demand Button so initial page load is instant
+        if "nifty_ai_summary" not in st.session_state:
+            if st.button("🧠 Generate AI Market Briefing", key="btn_nifty_ai"):
+                with st.spinner("Analyzing technical levels..."):
+                    st.session_state["nifty_ai_summary"] = generate_ai_sentiment(
+                        market_data['price'], market_data['daily_pts'], market_data['daily_pct'], 
+                        market_data['ret_1m'], market_data['ret_6m'], market_data['trend']
+                    )
+                    st.rerun()
+        else:
+            st.markdown(st.session_state["nifty_ai_summary"])
+            
     else:
         st.error("Market data feed temporarily unavailable from upstream exchange servers.")
 
@@ -384,7 +390,6 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
             scan_map = theme_dict if selected_theme.startswith("All") else {selected_theme: theme_dict[selected_theme]}
             tasks = [(t, t_name, strategy) for t_name, tickers in scan_map.items() for t in tickers]
             
-            # NEW: Runs data collection in parallel, massive speedup
             all_cands = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 futures = [executor.submit(analyze_stock, t[0], t[1], t[2]) for t in tasks]
@@ -404,7 +409,6 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
         st.dataframe(df_sorted[["Symbol", "Price (₹)", "Market Cap (Cr)", "P/E", "Debt/Equity", "ROE (%)", "Overall Score (/100)", "Tier"]], use_container_width=True)
         top_picks = df_sorted.head(4).to_dict('records')
         
-        # NEW: Lazy-Load AI Dossiers (On-Demand)
         st.markdown("### 🔬 Quant Results (Click to generate AI Dossier)")
         dossier_map = {}
         
@@ -422,7 +426,6 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                 
                 if candidate["Red Flags"]: st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
                 
-                # On-Demand AI Button
                 if f"ai_{sym}" not in st.session_state:
                     if st.button(f"🧠 Generate AI Dossier for {sym}", key=f"gen_{sym}"):
                         with st.spinner("Gemini is writing the dossier..."):
@@ -432,7 +435,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                     st.markdown(st.session_state[f"ai_{sym}"])
                     dossier_map[sym] = st.session_state[f"ai_{sym}"]
 
-        if dossier_map: # Only show PDF download if at least one dossier was generated
+        if dossier_map:
             pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Research")
             st.download_button("📄 Download PDF Report", data=pdf, file_name=f"{strategy}_report.pdf", mime="application/pdf", key=f"dl_{strategy}")
 
