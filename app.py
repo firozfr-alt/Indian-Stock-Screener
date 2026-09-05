@@ -6,6 +6,7 @@ from google import genai
 import time
 from datetime import datetime
 from fpdf import FPDF
+import concurrent.futures
 
 st.set_page_config(
     page_title="AI Equity Screener",
@@ -23,25 +24,22 @@ ai_client = None
 if "GEMINI_API_KEY" in st.secrets:
     try:
         ai_client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-        st.sidebar.success("✅ Google Gemini AI: Online (Fortress Mode)")
+        st.sidebar.success("✅ Google Gemini AI: Online")
     except Exception as e:
-        st.sidebar.warning(f"⚠️ Gemini Offline: {e}. Deterministic engine active.")
+        st.sidebar.warning(f"⚠️ Gemini Offline: {e}")
 else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET DATA & SENTIMENT (DECOUPLED CACHE)
+# 2. LIVE MARKET DATA & SENTIMENT
 # =========================================================
-@st.cache_data(ttl=60)  # Refreshes price every 60 seconds
+@st.cache_data(ttl=60)
 def fetch_market_data():
     try:
         nifty = yf.Ticker("^NSEI")
-        
-        # Trailing 6 months of daily data for momentum math
         hist = nifty.history(period="6mo")
         is_etf = False
         
-        # Fallback to ETF if cloud IP is blocked on index ticker
         if hist.empty or len(hist) < 22:
             nifty = yf.Ticker("NIFTYBEES.NS")
             hist = nifty.history(period="6mo")
@@ -50,14 +48,12 @@ def fetch_market_data():
         if hist.empty or len(hist) < 22:
             return None
             
-        # Pull intraday 2-minute candles for true live price
         live_hist = nifty.history(period="1d", interval="2m")
         if not live_hist.empty:
             current_price = float(live_hist['Close'].iloc[-1])
         else:
             current_price = float(hist['Close'].iloc[-1])
             
-        # Safely calculate daily delta without relying on the unstable .info endpoint
         if not live_hist.empty and live_hist.index[-1].date() > hist.index[-1].date():
             prev_price = float(hist['Close'].iloc[-1])
         else:
@@ -83,7 +79,7 @@ def fetch_market_data():
     except Exception:
         return None
 
-@st.cache_data(ttl=3600)  # Caches AI synthesis for 1 hour to protect quota
+@st.cache_data(ttl=3600)
 def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
     if not ai_client:
         return "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
@@ -123,9 +119,7 @@ def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
                     
     return "Market sentiment summary is currently unavailable due to high AI server demand. Pipeline scans remain fully operational."
 
-# Render Section 2 UI
 market_data = fetch_market_data()
-
 if market_data:
     prefix = "Nifty BeES: " if market_data.get("is_etf") else "Nifty 50: "
     header_title = f"📊 Current Indian Market Sentiment ({prefix}₹{market_data['price']:,.2f} | {market_data['daily_pts']:+,.2f} pts / {market_data['daily_pct']:+.2f}%)"
@@ -144,18 +138,19 @@ with st.expander(header_title, expanded=True):
         m4.metric("Quant Trend", market_data['trend'])
         st.divider()
         
-        with st.spinner("Analyzing technical levels..."):
-            ai_summary = generate_ai_sentiment(
-                market_data['price'], 
-                market_data['daily_pts'], 
-                market_data['daily_pct'], 
-                market_data['ret_1m'], 
-                market_data['ret_6m'], 
-                market_data['trend']
-            )
-            st.markdown(ai_summary)
+        if "nifty_ai_summary" not in st.session_state:
+            if st.button("🧠 Generate AI Market Briefing", key="btn_nifty_ai"):
+                with st.spinner("Analyzing technical levels..."):
+                    st.session_state["nifty_ai_summary"] = generate_ai_sentiment(
+                        market_data['price'], market_data['daily_pts'], market_data['daily_pct'], 
+                        market_data['ret_1m'], market_data['ret_6m'], market_data['trend']
+                    )
+                    st.rerun()
+        else:
+            st.markdown(st.session_state["nifty_ai_summary"])
+            
     else:
-        st.error("Market data feed temporarily unavailable from upstream exchange servers. The API may be rate-limiting cloud IP addresses.")
+        st.error("Market data feed temporarily unavailable from upstream exchange servers.")
 
 # =========================================================
 # 3. DEFINED UNIVERSES PER STRATEGY
@@ -178,7 +173,7 @@ PENNY_MICRO_THEMES = {
 }
 
 # =========================================================
-# 4. DETERMINISTIC QUANT & FORENSIC AUDIT ENGINE
+# 4. DETERMINISTIC QUANT ENGINE
 # =========================================================
 @st.cache_data(ttl=1800)
 def analyze_stock(ticker, theme, strategy_type="core"):
@@ -186,12 +181,10 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         stock = yf.Ticker(ticker)
         hist = stock.history(period="1y")
         
-        if hist.empty or len(hist) < 30: 
-            return None
+        if hist.empty or len(hist) < 30: return None
             
         close = hist['Close'].dropna() 
-        if close.empty: 
-            return None
+        if close.empty: return None
             
         current_price = round(float(close.iloc[-1]), 2)
         volume_avg = float(hist['Volume'].tail(20).mean())
@@ -220,10 +213,8 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         rev_val = 0.0
         
         if not fin.empty:
-            if 'Total Revenue' in fin.index: 
-                rev_val = float(fin.loc['Total Revenue'].iloc[0])
-            if 'Net Income' in fin.index: 
-                net_inc = float(fin.loc['Net Income'].iloc[0])
+            if 'Total Revenue' in fin.index: rev_val = float(fin.loc['Total Revenue'].iloc[0])
+            if 'Net Income' in fin.index: net_inc = float(fin.loc['Net Income'].iloc[0])
             if 'Operating Income' in fin.index and opm is None:
                 opm = float(fin.loc['Operating Income'].iloc[0] / rev_val) if rev_val > 0 else 0.12
                 
@@ -244,20 +235,15 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         twin_engine_pat_cagr = round((((3.0 / multiple_expansion_ratio) ** (1/3)) - 1) * 100, 2)
 
         red_flags = []
-        if de_val > 1.2: 
-            red_flags.append(("CRITICAL", f"High Debt ({de_val})"))
-        if cash_conversion < 0.55 and net_inc > 0: 
-            red_flags.append(("HIGH", f"Weak Cash Conv ({cash_conversion}x)"))
+        if de_val > 1.2: red_flags.append(("CRITICAL", f"High Debt ({de_val})"))
+        if cash_conversion < 0.55 and net_inc > 0: red_flags.append(("HIGH", f"Weak Cash Conv ({cash_conversion}x)"))
 
         score = 0
         feasibility = 0
         
         if strategy_type == "penny":
-            if volume_avg < 250000: 
-                red_flags.append(("CRITICAL", "Low Liquidity (Operator Trap Risk)"))
-            if ocf_val < 0 and net_inc > 0: 
-                red_flags.append(("CRITICAL", "Negative OCF with Positive PAT (Fake Earnings Flag)"))
-            
+            if volume_avg < 250000: red_flags.append(("CRITICAL", "Low Liquidity"))
+            if ocf_val < 0 and net_inc > 0: red_flags.append(("CRITICAL", "Fake Earnings Flag"))
             if de_val <= 0.1: score += 30
             elif de_val <= 0.5: score += 15
             if cash_conversion >= 1.0: score += 30
@@ -265,26 +251,23 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             if volume_avg > 1000000: score += 20
             elif volume_avg > 250000: score += 10
             if current_price > sma_50: score += 20
-            
             if market_cap_cr < 1000: feasibility += 50
             elif market_cap_cr < 3000: feasibility += 25
             if current_price < 50: feasibility += 50
             
         elif strategy_type == "smallcap":
-            if volume_avg < 30000: 
-                red_flags.append(("HIGH", "Low Daily Liquidity"))
+            if volume_avg < 30000: red_flags.append(("HIGH", "Low Liquidity"))
             if de_val <= 0.2: score += 25
             elif de_val <= 0.6: score += 15
             if cash_conversion >= 0.75: score += 25
             if roe_pct >= 12.0: score += 20
             if opm_pct >= 10.0: score += 15
             if current_price > sma_50: score += 15
-            
             if market_cap_cr < 5000: feasibility += 35
             if twin_engine_pat_cagr <= 35.0: feasibility += 35
             if roe_pct >= 12.0 and de_val <= 0.5: feasibility += 30
             
-        else:  # LARGE/MID-CAP CORE
+        else:  
             if roe_pct >= 20.0: score += 20
             elif roe_pct >= 14.0: score += 14
             if de_val <= 0.3: score += 15
@@ -293,247 +276,171 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             if 0 < pe_val <= 45.0: score += 15
             if current_price > sma_50 and current_price > sma_200: score += 10
             if ret_6m > 15.0: score += 10
-            
             if market_cap_cr < 15000: feasibility += 35
             if twin_engine_pat_cagr <= 30.0: feasibility += 35
             if roe_pct >= 15.0 and de_val <= 0.3: feasibility += 30
 
-        if score >= 70 and feasibility >= 60 and len(red_flags) == 0:
-            tier = "TIER A - High-Conviction"
-        elif score >= 50 and feasibility >= 45:
-            tier = "TIER B - Watchlist"
-        else:
-            tier = "TIER C - Speculative"
+        tier = "TIER A - High-Conviction" if (score >= 70 and feasibility >= 60 and not red_flags) else "TIER B - Watchlist" if (score >= 50 and feasibility >= 45) else "TIER C - Speculative"
 
         return {
-            "Symbol": ticker.replace(".NS", ""),
-            "Theme": theme,
-            "Price (₹)": current_price,
-            "Target 3x Price (₹)": target_3x_price,
-            "Market Cap (Cr)": market_cap_cr,
-            "Target 3x Cap (Cr)": target_3x_mcap_cr,
-            "P/E": pe_val,
-            "Target Multiple": round(target_pe_benchmark, 1),
-            "Req PAT CAGR (Twin Engine)": f"{twin_engine_pat_cagr}%",
-            "ROE (%)": roe_pct,
-            "OPM (%)": opm_pct,
-            "Debt/Equity": de_val,
-            "Cash Conv (OCF/PAT)": f"{cash_conversion}x",
-            "Overall Score (/100)": score,
-            "3x Feasibility (/100)": feasibility,
-            "Tier": tier,
-            "Red Flags": red_flags
+            "Symbol": ticker.replace(".NS", ""), "Theme": theme, "Price (₹)": current_price,
+            "Target 3x Price (₹)": target_3x_price, "Market Cap (Cr)": market_cap_cr,
+            "Target 3x Cap (Cr)": target_3x_mcap_cr, "P/E": pe_val,
+            "Target Multiple": round(target_pe_benchmark, 1), "Req PAT CAGR (Twin Engine)": f"{twin_engine_pat_cagr}%",
+            "ROE (%)": roe_pct, "OPM (%)": opm_pct, "Debt/Equity": de_val,
+            "Cash Conv (OCF/PAT)": f"{cash_conversion}x", "Overall Score (/100)": score,
+            "3x Feasibility (/100)": feasibility, "Tier": tier, "Red Flags": red_flags
         }
     except Exception:
         return None
 
 # =========================================================
-# 5. GEMINI FORTRESS RETRY ENGINE
+# 5. GEMINI DOSSIER GENERATOR
 # =========================================================
 def run_four_agent_dossier(candidate, strategy_type="core"):
-    sym = candidate["Symbol"]
-    theme = candidate["Theme"]
-    
-    if strategy_type == "penny":
-        agent_instructions = """
-        ### AGENT 1: GEMINI (Bankruptcy & Solvency Audit)
-        ### AGENT 2: GROK (Operator Manipulation & Volume Analysis)
-        ### AGENT 3: CHATGPT (Real Cash Flow vs Fake Earnings Audit)
-        ### AGENT 4: CLAUDE (Delisting Risk & Promoter Check)
-        ### FINAL JUDGE COMMITTEE VERDICT
-        """
-    else:
-        agent_instructions = """
-        ### AGENT 1: GEMINI (Fundamental Moat & Working Capital)
-        ### AGENT 2: GROK (Real-Time Catalysts & Order Book)
-        ### AGENT 3: CHATGPT (3× Mathematical Feasibility)
-        ### AGENT 4: CLAUDE (Forensic Adversary & Margin of Safety)
-        ### FINAL JUDGE COMMITTEE VERDICT
-        """
-
+    sym, theme = candidate["Symbol"], candidate["Theme"]
+    agent_instructions = """
+    ### AGENT 1: GEMINI (Fundamental Moat & Solvency Audit)
+    ### AGENT 2: GROK (Operator Manipulation & Order Book)
+    ### AGENT 3: CHATGPT (Real Cash Flow Audit)
+    ### AGENT 4: CLAUDE (Margin of Safety)
+    ### FINAL VERDICT
+    """
     context_data = f"""
-    Target: {sym} (NSE India) | Category: {theme} | Strategy: {strategy_type.upper()}
-    Price: INR {float(candidate['Price (₹)']):.2f} | MCap: INR {candidate['Market Cap (Cr)']} Cr
-    ROE: {candidate['ROE (%)']}% | OPM: {candidate['OPM (%)']}% | P/E: {candidate['P/E']}
-    D/E: {candidate['Debt/Equity']} | Cash Conv (OCF/PAT): {candidate['Cash Conv (OCF/PAT)']}
+    Target: {sym} | Theme: {theme} | Strategy: {strategy_type.upper()}
+    Price: {candidate['Price (₹)']} | MCap: {candidate['Market Cap (Cr)']}
+    ROE: {candidate['ROE (%)']}% | P/E: {candidate['P/E']} | D/E: {candidate['Debt/Equity']}
     Flags: {[f[1] for f in candidate['Red Flags']]}
     """
+    
+    if not ai_client: return f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."
 
-    if not ai_client: 
-        return {"full_dossier": f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100 with required 3Y CAGR of {candidate['Req PAT CAGR (Twin Engine)']}."}
-
-    master_prompt = f"""
-    Analyze {sym} ({strategy_type.upper()} Strategy).
-    {context_data}
+    prompt = f"Analyze {sym}.\n{context_data}\nFormat using standard bullet points (-). NO tables.\nProvide sections:\n{agent_instructions}"
     
-    CRITICAL FORMATTING RULES:
-    1. NEVER use markdown tables, pipe characters, or ASCII art.
-    2. Format all evaluations using standard unordered bullet points (-).
-    3. Do not output raw emojis or non-ASCII symbols.
-    
-    Provide 5 sections:
-    {agent_instructions}
-    """
-    
-    models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-    
-    for model_name in models_to_try:
-        max_retries = 3
-        for attempt in range(max_retries):
+    for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
+        for attempt in range(2):
             try:
-                response = ai_client.models.generate_content(model=model_name, contents=master_prompt)
-                if response.text and response.text.strip() != "":
-                    return {"full_dossier": response.text.strip()}
+                response = ai_client.models.generate_content(model=model_name, contents=prompt)
+                return response.text.strip() if response.text else "Generation failed."
             except Exception as e:
-                error_str = str(e).lower()
-                if "429" in error_str or "quota" in error_str or "rate limit" in error_str or "503" in error_str or "unavailable" in error_str:
-                    time.sleep(20)
-                    continue
-                else:
-                    break
-                    
-    return {"full_dossier": "Gemini API servers are overloaded (503/429) across retries. Deterministic quantitative scores remain fully verified."}
+                if "429" in str(e) or "503" in str(e): time.sleep(3)
+                else: break
+    return "API rate limits reached. Try again shortly."
+
+# Helper function for parallel AI generation
+def fetch_dossier_parallel(candidate, strategy):
+    sym = candidate["Symbol"]
+    dossier_text = run_four_agent_dossier(candidate, strategy)
+    return sym, dossier_text
 
 # =========================================================
-# 6. PDF DOSSIER GENERATOR
+# 6. PDF EXPORTER
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
         self.set_font("helvetica", "B", 12)
-        self.set_text_color(20, 35, 60)
-        self.cell(0, 7, "INDIAN EQUITY RESEARCH DOSSIER", ln=True, align="C")
+        self.cell(0, 7, "INDIAN EQUITY RESEARCH", ln=True, align="C")
         self.ln(3)
 
-def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report"):
+def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
     pdf = MultibaggerPDF()
     pdf.set_auto_page_break(auto=True, margin=10)
     pdf.add_page()
-    
     pdf.set_font("helvetica", "B", 10)
-    safe_title = report_title.replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
-    pdf.cell(0, 6, f"1. Executive Summary: {safe_title}", ln=True)
+    pdf.cell(0, 6, f"Summary: {report_title}", ln=True)
     pdf.ln(1)
     
     pdf.set_font("helvetica", "B", 8)
     pdf.set_fill_color(230, 235, 245)
-    pdf.cell(25, 5, "Symbol", 1, 0, 'C', True)
-    pdf.cell(35, 5, "Theme", 1, 0, 'C', True)
-    pdf.cell(22, 5, "Price (INR)", 1, 0, 'C', True)
-    pdf.cell(25, 5, "MCap (Cr)", 1, 0, 'C', True)
-    pdf.cell(20, 5, "Score", 1, 0, 'C', True)
-    pdf.cell(22, 5, "Feas.", 1, 0, 'C', True)
-    pdf.cell(41, 5, "Classification", 1, 1, 'C', True)
+    headers = ["Symbol", "Price", "MCap (Cr)", "Score", "Tier"]
+    widths = [25, 25, 30, 20, 50]
+    for w, h in zip(widths, headers): pdf.cell(w, 5, h, 1, 0, 'C', True)
+    pdf.ln()
     
     pdf.set_font("helvetica", "", 7.5)
     for c in candidate_list:
-        safe_theme = c['Theme'].replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
         pdf.cell(25, 5, c['Symbol'], 1, 0, 'C')
-        pdf.cell(35, 5, safe_theme[:20], 1, 0, 'L')
-        pdf.cell(22, 5, f"{float(c['Price (₹)']):.2f}", 1, 0, 'C')
-        pdf.cell(25, 5, f"{c['Market Cap (Cr)']:,}", 1, 0, 'C')
-        pdf.cell(20, 5, f"{c['Overall Score (/100)']}/100", 1, 0, 'C')
-        pdf.cell(22, 5, f"{c['3x Feasibility (/100)']}/100", 1, 0, 'C')
-        pdf.cell(41, 5, c['Tier'][:23], 1, 1, 'L')
+        pdf.cell(25, 5, f"{float(c['Price (₹)']):.2f}", 1, 0, 'C')
+        pdf.cell(30, 5, f"{c['Market Cap (Cr)']:,}", 1, 0, 'C')
+        pdf.cell(20, 5, f"{c['Overall Score (/100)']}", 1, 0, 'C')
+        pdf.cell(50, 5, c['Tier'][:25], 1, 1, 'L')
     pdf.ln(5)
 
     for c in candidate_list:
         sym = c['Symbol']
-        safe_theme = c['Theme'].replace('₹', 'INR').encode('latin-1', 'replace').decode('latin-1')
         pdf.set_font("helvetica", "B", 10)
-        pdf.set_x(10)
-        pdf.cell(0, 6, f"Dossier: {sym} ({safe_theme})", ln=1)
-        
+        pdf.cell(0, 6, f"Dossier: {sym}", ln=1)
         pdf.set_font("helvetica", "", 8)
-        stats1 = f"Price: INR {float(c['Price (₹)']):.2f} | MCap: INR {c['Market Cap (Cr)']:,} Cr | D/E: {c['Debt/Equity']} | Cash Conv: {c['Cash Conv (OCF/PAT)']}"
-        pdf.set_x(10)
-        pdf.multi_cell(190, 4, stats1)
-        pdf.ln(2)
-
         if sym in dossier_dict:
-            pdf.set_font("helvetica", "", 8)
-            raw_text = dossier_dict[sym].replace('₹', 'INR').replace('**', '').replace('### ', '').replace('#### ', '')
-            clean_text = raw_text.encode('latin-1', 'ignore').decode('latin-1')
-            pdf.set_x(10)
-            pdf.multi_cell(190, 3.8, clean_text)
+            clean_text = dossier_dict[sym].replace('₹', 'INR').replace('**', '').replace('### ', '')
+            pdf.multi_cell(190, 4, clean_text.encode('latin-1', 'ignore').decode('latin-1'))
         pdf.ln(4)
-
-    # FIX: Encoded strictly as latin-1 to avoid Streamlit Cloud string-to-byte conflicts
     return pdf.output(dest="S").encode("latin-1")
 
 # =========================================================
-# 7. TRI-TAB UI WORKFLOW 
+# 7. UI WORKFLOW (FULLY PARALLEL ORIGINAL STRATEGY)
 # =========================================================
 tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
 
 def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
     st.subheader(title)
-    selected_theme = st.selectbox(f"Select {strategy.capitalize()} Theme:", ["All Themes"] + list(theme_dict.keys()), key=f"sel_{strategy}")
-    min_score = st.slider("Minimum Quality Score (/100):", 35, 90, min_score_default, key=f"sld_{strategy}")
+    selected_theme = st.selectbox(f"Select Theme:", ["All Themes"] + list(theme_dict.keys()), key=f"sel_{strategy}")
+    min_score = st.slider("Minimum Score:", 35, 90, min_score_default, key=f"sld_{strategy}")
 
-    if st.button(f"🚀 Run {strategy.capitalize()} Pipeline", key=f"btn_{strategy}"):
-        with st.spinner("Running Data Audit & Gemini Engine..."):
-            all_cands = []
+    if st.button(f"🚀 Run Fast Pipeline", key=f"btn_{strategy}"):
+        with st.spinner("Step 1/2: Quant Scanning (Parallel)..."):
             scan_map = theme_dict if selected_theme.startswith("All") else {selected_theme: theme_dict[selected_theme]}
+            tasks = [(t, t_name, strategy) for t_name, tickers in scan_map.items() for t in tickers]
             
-            for t_name, tickers in scan_map.items():
-                for t in tickers:
-                    res = analyze_stock(t, t_name, strategy_type=strategy)
-                    if res: 
-                        all_cands.append(res)
-                    time.sleep(0.05)
-                    
-            df = pd.DataFrame(all_cands)
+            all_cands = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(analyze_stock, t[0], t[1], t[2]) for t in tasks]
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    if res: all_cands.append(res)
 
+            df = pd.DataFrame(all_cands)
+            
         if not df.empty:
             df_sorted = df[df["Overall Score (/100)"] >= min_score].sort_values(
-                by=["Overall Score (/100)", "3x Feasibility (/100)"], ascending=[False, False]
+                by=["Overall Score (/100)"], ascending=False
             ).reset_index(drop=True)
 
-            st.dataframe(df_sorted[[
-                "Symbol", "Price (₹)", "Market Cap (Cr)", "P/E", "Debt/Equity", "Cash Conv (OCF/PAT)", 
-                "ROE (%)", "Overall Score (/100)", "Tier"
-            ]], use_container_width=True)
-
+            st.dataframe(df_sorted[["Symbol", "Price (₹)", "Market Cap (Cr)", "P/E", "Debt/Equity", "ROE (%)", "Overall Score (/100)", "Tier"]], use_container_width=True)
             top_picks = df_sorted.head(4).to_dict('records')
-            dossier_map = {}
-
+            
             st.markdown(f"### 🔬 {strategy.capitalize()} Research Dossiers")
+            dossier_map = {}
+            
+            # Step 2: Generates all 4 AI dossiers at the EXACT SAME TIME
+            with st.spinner("Step 2/2: Generating AI Dossiers concurrently..."):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ai_executor:
+                    ai_futures = [ai_executor.submit(fetch_dossier_parallel, c, strategy) for c in top_picks]
+                    for future in concurrent.futures.as_completed(ai_futures):
+                        sym, content = future.result()
+                        dossier_map[sym] = content
+
+            # Render the results instantly after they all finish
             for candidate in top_picks:
                 sym = candidate["Symbol"]
-                with st.spinner(f"Gemini Audit on {sym}..."):
-                    dossier = run_four_agent_dossier(candidate, strategy_type=strategy)
-                    content = dossier.get("full_dossier", "")
-                    dossier_map[sym] = content
+                color = "🟢" if "TIER A" in candidate["Tier"] else ("🟡" if "TIER B" in candidate["Tier"] else "🔴")
+                
+                with st.expander(f"{color} {sym} — Quant Score: {candidate['Overall Score (/100)']}/100", expanded=True):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Current Price", f"₹{float(candidate['Price (₹)']):,.2f}")
+                    c1.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
+                    c2.metric("Debt-to-Equity", f"{candidate['Debt/Equity']}")
+                    c3.metric("ROE (%)", f"{candidate['ROE (%)']}%")
+                    c4.metric("3Y 3x Target", f"₹{float(candidate['Target 3x Price (₹)']):,.2f}")
                     
-                    color = "🟢" if "TIER A" in candidate["Tier"] else ("🟡" if "TIER B" in candidate["Tier"] else "🔴")
-                    with st.expander(f"{color} {sym} — Score: {candidate['Overall Score (/100)']}/100", expanded=True):
-                        c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Current Price", f"₹{float(candidate['Price (₹)']):,.2f}")
-                        c1.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
-                        c2.metric("Debt-to-Equity", f"{candidate['Debt/Equity']}")
-                        c2.metric("Cash Conversion", candidate['Cash Conv (OCF/PAT)'])
-                        c3.metric("ROE (%)", f"{candidate['ROE (%)']}%")
-                        c3.metric("Req. PAT CAGR", candidate['Req PAT CAGR (Twin Engine)'])
-                        c4.metric("3Y 3x Target", f"₹{float(candidate['Target 3x Price (₹)']):,.2f}")
-                        c4.metric("Target Cap", f"₹{candidate['Target 3x Cap (Cr)']:,} Cr")
-                        
-                        if candidate["Red Flags"]:
-                            st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
-                        else:
-                            st.success("✅ Zero Critical Flags")
-                        st.markdown(content)
+                    if candidate["Red Flags"]: st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
                     
-                    # Pacing throttle for 15 RPM free quota compliance
-                    time.sleep(15.0)
+                    st.markdown(dossier_map.get(sym, "Dossier not found."))
+            
+            if dossier_map:
+                pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Research")
+                st.download_button("📄 Download PDF Report", data=pdf, file_name=f"{strategy}_report.pdf", mime="application/pdf", key=f"dl_{strategy}")
 
-            if top_picks:
-                pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Candidates")
-                st.download_button("📄 Download Clean PDF Dossier", data=pdf, file_name=f"{strategy}_research.pdf", mime="application/pdf", key=f"dl_{strategy}")
-
-# Render UI across strategy tabs
-with tab_core:
-    render_pipeline_ui(LARGE_MID_CAP_THEMES, "large/mid-cap", "Secular Growth & Market Leaders", 60)
-with tab_smallcap:
-    render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders (INR 1K-5K Cr)", 50)
-with tab_penny:
-    render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny (< INR 50) & Nano-Caps", 50)
+with tab_core: render_pipeline_ui(LARGE_MID_CAP_THEMES, "large/mid-cap", "Secular Growth & Market Leaders", 60)
+with tab_smallcap: render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders", 50)
+with tab_penny: render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny & Nano-Caps", 50)
