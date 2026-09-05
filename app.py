@@ -31,7 +31,7 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET DATA & SENTIMENT
+# 2. LIVE MARKET DATA & SENTIMENT (AUTOMATED)
 # =========================================================
 @st.cache_data(ttl=60)
 def fetch_market_data():
@@ -138,16 +138,13 @@ with st.expander(header_title, expanded=True):
         m4.metric("Quant Trend", market_data['trend'])
         st.divider()
         
-        if "nifty_ai_summary" not in st.session_state:
-            if st.button("🧠 Generate AI Market Briefing", key="btn_nifty_ai"):
-                with st.spinner("Analyzing technical levels..."):
-                    st.session_state["nifty_ai_summary"] = generate_ai_sentiment(
-                        market_data['price'], market_data['daily_pts'], market_data['daily_pct'], 
-                        market_data['ret_1m'], market_data['ret_6m'], market_data['trend']
-                    )
-                    st.rerun()
-        else:
-            st.markdown(st.session_state["nifty_ai_summary"])
+        # FIXED: Removed the button. Auto-generates silently and caches for 1 hour.
+        with st.spinner("Analyzing technical levels..."):
+            ai_summary = generate_ai_sentiment(
+                market_data['price'], market_data['daily_pts'], market_data['daily_pct'], 
+                market_data['ret_1m'], market_data['ret_6m'], market_data['trend']
+            )
+            st.markdown(ai_summary)
             
     else:
         st.error("Market data feed temporarily unavailable from upstream exchange servers.")
@@ -173,7 +170,7 @@ PENNY_MICRO_THEMES = {
 }
 
 # =========================================================
-# 4. DETERMINISTIC QUANT ENGINE
+# 4. DETERMINISTIC QUANT ENGINE (Parallel Optimized)
 # =========================================================
 @st.cache_data(ttl=1800)
 def analyze_stock(ticker, theme, strategy_type="core"):
@@ -295,7 +292,7 @@ def analyze_stock(ticker, theme, strategy_type="core"):
         return None
 
 # =========================================================
-# 5. GEMINI DOSSIER GENERATOR
+# 5. GEMINI DOSSIER GENERATOR (Parallel Optimized)
 # =========================================================
 def run_four_agent_dossier(candidate, strategy_type="core"):
     sym, theme = candidate["Symbol"], candidate["Theme"]
@@ -318,16 +315,15 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     prompt = f"Analyze {sym}.\n{context_data}\nFormat using standard bullet points (-). NO tables.\nProvide sections:\n{agent_instructions}"
     
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 response = ai_client.models.generate_content(model=model_name, contents=prompt)
                 return response.text.strip() if response.text else "Generation failed."
             except Exception as e:
-                if "429" in str(e) or "503" in str(e): time.sleep(3)
+                if "429" in str(e) or "503" in str(e): time.sleep(5)
                 else: break
     return "API rate limits reached. Try again shortly."
 
-# Helper function for parallel AI generation
 def fetch_dossier_parallel(candidate, strategy):
     sym = candidate["Symbol"]
     dossier_text = run_four_agent_dossier(candidate, strategy)
@@ -378,7 +374,7 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
     return pdf.output(dest="S").encode("latin-1")
 
 # =========================================================
-# 7. UI WORKFLOW (FULLY PARALLEL ORIGINAL STRATEGY)
+# 7. UI WORKFLOW (FULLY AUTOMATED & PARALLEL)
 # =========================================================
 tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
 
@@ -388,7 +384,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
     min_score = st.slider("Minimum Score:", 35, 90, min_score_default, key=f"sld_{strategy}")
 
     if st.button(f"🚀 Run Fast Pipeline", key=f"btn_{strategy}"):
-        with st.spinner("Step 1/2: Quant Scanning (Parallel)..."):
+        with st.spinner("Step 1/2: Quant Scanning (Parallel Processing)..."):
             scan_map = theme_dict if selected_theme.startswith("All") else {selected_theme: theme_dict[selected_theme]}
             tasks = [(t, t_name, strategy) for t_name, tickers in scan_map.items() for t in tickers]
             
@@ -412,7 +408,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
             st.markdown(f"### 🔬 {strategy.capitalize()} Research Dossiers")
             dossier_map = {}
             
-            # Step 2: Generates all 4 AI dossiers at the EXACT SAME TIME
+            # FIXED: Fully Automated. All 4 AI dossiers generate instantly without manual buttons.
             with st.spinner("Step 2/2: Generating AI Dossiers concurrently..."):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ai_executor:
                     ai_futures = [ai_executor.submit(fetch_dossier_parallel, c, strategy) for c in top_picks]
@@ -420,7 +416,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                         sym, content = future.result()
                         dossier_map[sym] = content
 
-            # Render the results instantly after they all finish
+            # Render the results
             for candidate in top_picks:
                 sym = candidate["Symbol"]
                 color = "🟢" if "TIER A" in candidate["Tier"] else ("🟡" if "TIER B" in candidate["Tier"] else "🔴")
