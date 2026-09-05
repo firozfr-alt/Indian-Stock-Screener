@@ -8,13 +8,13 @@ from datetime import datetime
 from fpdf import FPDF
 
 st.set_page_config(
-    page_title="Indian Multibagger AI Analyst",
+    page_title="AI Equity Screener",
     page_icon="📈",
     layout="wide"
 )
 
 st.title("🏛️ Institutional Indian Equity Screener")
-st.caption("Tri-Strategy Engine: Core Compounders | Small-Caps | Penny Stocks (Powered by Google Gemini)")
+st.caption("AI-Powered Tri-Strategy: Large/Mid-Cap Core | Small-Caps | Penny Stocks")
 
 # =========================================================
 # 1. GEMINI AI INITIALIZATION
@@ -30,58 +30,137 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET SENTIMENT OVERVIEW (WITH NIFTYBEES FALLBACK)
+# 2. LIVE MARKET DATA & SENTIMENT (DECOUPLED CACHE)
 # =========================================================
-@st.cache_data(ttl=3600)
-def fetch_market_sentiment():
-    if not ai_client:
-        return "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
-        
+@st.cache_data(ttl=60)  # Refreshes price every 60 seconds
+def fetch_market_data():
     try:
-        # Primary: Pull raw Nifty 50 index
         nifty = yf.Ticker("^NSEI")
-        hist = nifty.history(period="6m")
         
-        # Fallback: Pull NIFTYBEES ETF if cloud IP is blocked by Yahoo Finance on raw index
+        # Trailing 6 months of daily data for momentum math
+        hist = nifty.history(period="6mo")
+        is_etf = False
+        
+        # Fallback to ETF if cloud IP is blocked on index ticker
         if hist.empty or len(hist) < 22:
             nifty = yf.Ticker("NIFTYBEES.NS")
-            hist = nifty.history(period="6m")
+            hist = nifty.history(period="6mo")
+            is_etf = True
             
         if hist.empty or len(hist) < 22:
-            return "Market data feed temporarily unavailable from upstream exchange servers."
+            return None
             
-        current_price = float(hist['Close'].iloc[-1])
+        # Pull intraday 2-minute candles for true live price
+        live_hist = nifty.history(period="1d", interval="2m")
+        if not live_hist.empty:
+            current_price = float(live_hist['Close'].iloc[-1])
+        else:
+            current_price = float(hist['Close'].iloc[-1])
+            
+        # Safely calculate daily delta without relying on the unstable .info endpoint
+        if not live_hist.empty and live_hist.index[-1].date() > hist.index[-1].date():
+            prev_price = float(hist['Close'].iloc[-1])
+        else:
+            prev_price = float(hist['Close'].iloc[-2])
+            
+        daily_change_pts = current_price - prev_price
+        daily_change_pct = (daily_change_pts / prev_price) * 100
+        
         ret_1m = float(((current_price - hist['Close'].iloc[-22]) / hist['Close'].iloc[-22]) * 100)
         ret_6m = float(((current_price - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100)
         
         market_trend = "Bullish" if ret_1m > 0 and ret_6m > 0 else "Bearish" if ret_1m < 0 and ret_6m < 0 else "Mixed/Consolidating"
         
-        prompt = f"""
-        You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
-        The benchmark Nifty 50 is trading with the following technical data:
-        - 1-Month Momentum: {ret_1m:.2f}%
-        - 6-Month Momentum: {ret_6m:.2f}%
-        - Quantitative Trend: {market_trend}
-        
-        Write a concise, 3-sentence market sentiment briefing based purely on these figures. 
-        Cover institutional risk appetite, momentum stability, and deployment posture. 
-        Do not use markdown bolding, headers, or bullet points. Keep it professional and direct.
-        """
-        
-        response = ai_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        return response.text.strip()
+        return {
+            "price": current_price,
+            "daily_pts": daily_change_pts,
+            "daily_pct": daily_change_pct,
+            "ret_1m": ret_1m,
+            "ret_6m": ret_6m,
+            "trend": market_trend,
+            "is_etf": is_etf
+        }
     except Exception:
-        return "Nifty 50 momentum data is currently updating. Pipeline scans remain fully operational."
+        return None
 
-with st.expander("📊 **Current Indian Market Sentiment (Nifty 50 Overview)**", expanded=True):
-    with st.spinner("Analyzing benchmark momentum..."):
-        sentiment_text = fetch_market_sentiment()
-        st.info(sentiment_text)
+@st.cache_data(ttl=3600)  # Caches AI synthesis for 1 hour to protect quota
+def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
+    if not ai_client:
+        return "Market sentiment AI is currently offline. Please configure GEMINI_API_KEY in Streamlit Secrets."
+        
+    prompt = f"""
+    You are a top-tier Institutional Equity Strategist for the Indian Stock Market.
+    The benchmark Nifty 50 is currently trading at {price:.2f}.
+    Technical data:
+    - Daily Delta: {daily_pts:+.2f} pts ({daily_pct:+.2f}%)
+    - 1-Month Momentum: {ret_1m:.2f}%
+    - 6-Month Momentum: {ret_6m:.2f}%
+    - Quantitative Trend: {trend}
+    
+    Write an institutional market sentiment briefing. Structure your response EXACTLY into these three short sections using standard bullet points:
+    **1. Trend Confirmation:** Assess current momentum, moving average trajectory, and institutional posture.
+    **2. The Upside (Resistance):** Identify immediate resistance and breakout levels relative to the current price of {price:.2f}.
+    **3. The Downside (Support):** Identify immediate support cushions and risk levels relative to {price:.2f}.
+    
+    Keep it highly professional, analytical, and direct.
+    """
+    
+    models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(model=model_name, contents=prompt)
+                if response.text:
+                    return response.text.strip()
+            except Exception as api_e:
+                error_str = str(api_e).lower()
+                if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
+                    time.sleep(5)
+                    continue
+                else:
+                    break
+                    
+    return "Market sentiment summary is currently unavailable due to high AI server demand. Pipeline scans remain fully operational."
+
+# Render Section 2 UI
+market_data = fetch_market_data()
+
+if market_data:
+    prefix = "Nifty BeES: " if market_data.get("is_etf") else "Nifty 50: "
+    header_title = f"📊 Current Indian Market Sentiment ({prefix}₹{market_data['price']:,.2f} | {market_data['daily_pts']:+,.2f} pts / {market_data['daily_pct']:+.2f}%)"
+else:
+    header_title = "📊 Current Indian Market Sentiment (Data Unavailable)"
+
+with st.expander(header_title, expanded=True):
+    if market_data:
+        m1, m2, m3, m4 = st.columns(4)
+        price_label = "Nifty 50 (Proxy ETF)" if market_data.get("is_etf") else "Nifty 50 Current Price"
+        delta_str = f"{market_data['daily_pts']:+,.2f} ({market_data['daily_pct']:+.2f}%)"
+        
+        m1.metric(price_label, f"₹{market_data['price']:,.2f}", delta=delta_str)
+        m2.metric("1-Month Momentum", f"{market_data['ret_1m']:+.2f}%")
+        m3.metric("6-Month Momentum", f"{market_data['ret_6m']:+.2f}%")
+        m4.metric("Quant Trend", market_data['trend'])
+        st.divider()
+        
+        with st.spinner("Analyzing technical levels..."):
+            ai_summary = generate_ai_sentiment(
+                market_data['price'], 
+                market_data['daily_pts'], 
+                market_data['daily_pct'], 
+                market_data['ret_1m'], 
+                market_data['ret_6m'], 
+                market_data['trend']
+            )
+            st.markdown(ai_summary)
+    else:
+        st.error("Market data feed temporarily unavailable from upstream exchange servers. The API may be rate-limiting cloud IP addresses.")
 
 # =========================================================
 # 3. DEFINED UNIVERSES PER STRATEGY
 # =========================================================
-CORE_MULTIBAGGER_THEMES = {
+LARGE_MID_CAP_THEMES = {
     "EMS & Electronics Manufacturing": ["DIXON.NS", "KAYNES.NS", "SYRMA.NS", "AMBER.NS"],
     "Defense & Capital Goods": ["HAL.NS", "BEL.NS", "BDL.NS", "MAZDOCK.NS"],
     "Clean Energy Transition": ["IREDA.NS", "KPIGREEN.NS", "TATAPOWER.NS"],
@@ -205,7 +284,7 @@ def analyze_stock(ticker, theme, strategy_type="core"):
             if twin_engine_pat_cagr <= 35.0: feasibility += 35
             if roe_pct >= 12.0 and de_val <= 0.5: feasibility += 30
             
-        else:  # CORE
+        else:  # LARGE/MID-CAP CORE
             if roe_pct >= 20.0: score += 20
             elif roe_pct >= 14.0: score += 14
             if de_val <= 0.3: score += 15
@@ -296,10 +375,7 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     {agent_instructions}
     """
     
-    models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-1.5-flash"
-    ]
+    models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
     
     for model_name in models_to_try:
         max_retries = 3
@@ -310,15 +386,13 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
                     return {"full_dossier": response.text.strip()}
             except Exception as e:
                 error_str = str(e).lower()
-                if "429" in error_str or "quota" in error_str or "rate limit" in error_str:
+                if "429" in error_str or "quota" in error_str or "rate limit" in error_str or "503" in error_str or "unavailable" in error_str:
                     time.sleep(20)
                     continue
-                elif "404" in error_str or "400" in error_str or "not found" in error_str:
-                    break
                 else:
                     break
                     
-    return {"full_dossier": "Gemini API rate limits reached across retries. Deterministic quantitative scores remain fully verified."}
+    return {"full_dossier": "Gemini API servers are overloaded (503/429) across retries. Deterministic quantitative scores remain fully verified."}
 
 # =========================================================
 # 6. PDF DOSSIER GENERATOR
@@ -383,12 +457,13 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Research Report
             pdf.multi_cell(190, 3.8, clean_text)
         pdf.ln(4)
 
-    return bytes(pdf.output())
+    # FIX: Encoded strictly as latin-1 to avoid Streamlit Cloud string-to-byte conflicts
+    return pdf.output(dest="S").encode("latin-1")
 
 # =========================================================
 # 7. TRI-TAB UI WORKFLOW 
 # =========================================================
-tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Core Compounders", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
+tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
 
 def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
     st.subheader(title)
@@ -457,7 +532,7 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
 
 # Render UI across strategy tabs
 with tab_core:
-    render_pipeline_ui(CORE_MULTIBAGGER_THEMES, "core", "Secular Growth & Market Leaders", 60)
+    render_pipeline_ui(LARGE_MID_CAP_THEMES, "large/mid-cap", "Secular Growth & Market Leaders", 60)
 with tab_smallcap:
     render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders (INR 1K-5K Cr)", 50)
 with tab_penny:
