@@ -4,7 +4,6 @@ import numpy as np
 import yfinance as yf
 from datetime import datetime
 import pytz
-import ta
 
 # ==========================================
 # 1. PAGE CONFIGURATION & MODERN STYLING
