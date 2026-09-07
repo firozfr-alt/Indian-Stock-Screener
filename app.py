@@ -319,7 +319,7 @@ def fetch_dossier_parallel(candidate, strategy):
     return sym, "API rate limits reached. Try again shortly."
 
 # =========================================================
-# 6. PDF EXPORTERS (TABS 1-3 & TAB 4)
+# 6. BULLETPROOF PDF EXPORTERS (TABS 1-3 & TAB 4)
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -327,57 +327,68 @@ class MultibaggerPDF(FPDF):
         self.cell(0, 7, "INDIAN EQUITY RESEARCH", ln=True, align="C")
         self.ln(3)
 
-# Exporter for Tabs 1-3 (Multi-Stock List)
+# NEW: Text Sanitizer Firewall. Prevents FPDF UnicodeEncodeError crashes.
+def clean_text_for_pdf(text):
+    if not isinstance(text, str):
+        text = str(text)
+    # Replaces smart quotes, long dashes, and rupees that crash the PDF engine
+    replacements = {
+        '₹': 'INR ', '—': '-', '–': '-', '’': "'", '‘': "'", '“': '"', '”': '"', 
+        '•': '-', '…': '...', '**': '', '### ': '\n'
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    # Forces latin-1. Any weird emoji remaining is swapped to '?' to prevent crashing
+    return text.encode('latin-1', 'replace').decode('latin-1')
+
 def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
     pdf = MultibaggerPDF()
     pdf.set_auto_page_break(auto=True, margin=10)
     pdf.add_page()
     pdf.set_font("helvetica", "B", 10)
-    pdf.cell(0, 6, f"Summary: {report_title}", ln=True)
+    pdf.cell(0, 6, clean_text_for_pdf(f"Summary: {report_title}"), ln=True)
     pdf.ln(1)
     
     pdf.set_font("helvetica", "B", 8)
     pdf.set_fill_color(230, 235, 245)
     headers = ["Symbol", "Price", "MCap (Cr)", "Score", "Tier"]
     widths = [25, 25, 30, 20, 50]
-    for w, h in zip(widths, headers): pdf.cell(w, 5, h, 1, 0, 'C', True)
+    for w, h in zip(widths, headers): pdf.cell(w, 5, clean_text_for_pdf(h), 1, 0, 'C', True)
     pdf.ln()
     
     pdf.set_font("helvetica", "", 7.5)
     for c in candidate_list:
-        pdf.cell(25, 5, c['Symbol'], 1, 0, 'C')
-        pdf.cell(25, 5, f"{float(c['Price (₹)']):.2f}", 1, 0, 'C')
-        pdf.cell(30, 5, f"{c['Market Cap (Cr)']:,}", 1, 0, 'C')
-        pdf.cell(20, 5, f"{c['Overall Score (/100)']}", 1, 0, 'C')
-        pdf.cell(50, 5, c['Tier'][:25], 1, 1, 'L')
+        pdf.cell(25, 5, clean_text_for_pdf(c['Symbol']), 1, 0, 'C')
+        pdf.cell(25, 5, clean_text_for_pdf(f"{float(c['Price (₹)']):.2f}"), 1, 0, 'C')
+        pdf.cell(30, 5, clean_text_for_pdf(f"{c['Market Cap (Cr)']:,}"), 1, 0, 'C')
+        pdf.cell(20, 5, clean_text_for_pdf(f"{c['Overall Score (/100)']}"), 1, 0, 'C')
+        pdf.cell(50, 5, clean_text_for_pdf(c['Tier'][:25]), 1, 1, 'L')
     pdf.ln(5)
 
     for c in candidate_list:
         sym = c['Symbol']
         pdf.set_font("helvetica", "B", 10)
-        pdf.cell(0, 6, f"Dossier: {sym}", ln=1)
+        pdf.cell(0, 6, clean_text_for_pdf(f"Dossier: {sym}"), ln=1)
         pdf.set_font("helvetica", "", 8)
         if sym in dossier_dict:
-            clean_text = dossier_dict[sym].replace('₹', 'INR').replace('**', '').replace('### ', '')
-            pdf.multi_cell(190, 4, clean_text.encode('latin-1', 'ignore').decode('latin-1'))
+            pdf.multi_cell(190, 4, clean_text_for_pdf(dossier_dict[sym]))
         pdf.ln(4)
-    return pdf.output(dest="S").encode("latin-1")
+    return pdf.output(dest="S").encode("latin-1", "replace")
 
-# NEW: Exporter specifically designed for Tab 4 (Single Stock Deep Audit)
 def build_single_stock_pdf(f_data, audit_text):
     pdf = MultibaggerPDF()
     pdf.set_auto_page_break(auto=True, margin=10)
     pdf.add_page()
     
     pdf.set_font("helvetica", "B", 12)
-    pdf.cell(0, 8, f"Deep Fundamental Audit: {f_data['name']} ({f_data['symbol']})", ln=True)
+    pdf.cell(0, 8, clean_text_for_pdf(f"Deep Fundamental Audit: {f_data['name']} ({f_data['symbol']})"), ln=True)
     pdf.set_font("helvetica", "", 9)
-    pdf.cell(0, 6, f"Sector: {f_data['sector']} | Tier: {f_data['cap_tier']}", ln=True)
+    pdf.cell(0, 6, clean_text_for_pdf(f"Sector: {f_data['sector']} | Tier: {f_data['cap_tier']}"), ln=True)
     pdf.ln(3)
     
     pdf.set_fill_color(240, 245, 250)
     pdf.set_font("helvetica", "B", 9)
-    pdf.cell(0, 6, " Key Financial Metrics", 0, 1, 'L', True)
+    pdf.cell(0, 6, clean_text_for_pdf(" Key Financial Metrics"), 0, 1, 'L', True)
     pdf.set_font("helvetica", "", 8)
     
     m_text = (
@@ -387,17 +398,16 @@ def build_single_stock_pdf(f_data, audit_text):
         f"Debt/Equity: {f_data['de_ratio'] if f_data['de_ratio'] is not None else 'N/A'}    |    Cash Conversion: {f_data['cash_conversion'] or 'N/A'}x\n"
         f"Piotroski Score: {f_data['f_score']}/9    |    FCF Yield: {f_data['fcf_yield'] or 'N/A'}%"
     )
-    pdf.multi_cell(0, 5, m_text)
+    pdf.multi_cell(0, 5, clean_text_for_pdf(m_text))
     pdf.ln(3)
     
     pdf.set_font("helvetica", "B", 9)
-    pdf.cell(0, 6, " 4-Agent Institutional AI Review", 0, 1, 'L', True)
+    pdf.cell(0, 6, clean_text_for_pdf(" 4-Agent Institutional AI Review"), 0, 1, 'L', True)
     pdf.set_font("helvetica", "", 8)
     
-    clean_text = audit_text.replace('₹', 'INR').replace('**', '').replace('### ', '\n')
-    pdf.multi_cell(0, 4, clean_text.encode('latin-1', 'ignore').decode('latin-1'))
+    pdf.multi_cell(0, 4, clean_text_for_pdf(audit_text))
     
-    return pdf.output(dest="S").encode("latin-1")
+    return pdf.output(dest="S").encode("latin-1", "replace")
 
 # =========================================================
 # 7. DEEP 10-POINT FUNDAMENTAL AUDIT ENGINE (TAB 4)
@@ -701,7 +711,6 @@ with tab_fundamental:
             st.markdown("### 🤖 4-Agent Institutional Investment Committee Review")
             st.markdown(audit_briefing)
             
-            # --- FIXED: ADDED THE PDF DOWNLOAD BUTTON FOR TAB 4 ---
             st.divider()
             pdf_bytes = build_single_stock_pdf(f_data, audit_briefing)
             st.download_button(
