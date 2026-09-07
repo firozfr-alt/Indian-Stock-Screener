@@ -290,6 +290,8 @@ def analyze_stock(ticker, theme, strategy_type="core"):
 
 def fetch_dossier_parallel(candidate, strategy):
     sym, theme = candidate["Symbol"], candidate["Theme"]
+    
+    # FIXED: Pipeline AI Dossier Prompt updated for BUY/SELL/WATCH/AVOID and data citations
     agent_instructions = """
     ### AGENT 1: GEMINI (Fundamental Moat & Solvency Audit)
     ### AGENT 2: GROK (Operator Manipulation & Order Book)
@@ -301,12 +303,21 @@ def fetch_dossier_parallel(candidate, strategy):
     Target: {sym} | Theme: {theme} | Strategy: {strategy.upper()}
     Price: {candidate['Price (₹)']} | MCap: {candidate['Market Cap (Cr)']}
     ROE: {candidate['ROE (%)']}% | P/E: {candidate['P/E']} | D/E: {candidate['Debt/Equity']}
+    Cash Conv: {candidate['Cash Conv (OCF/PAT)']}
     Flags: {[f[1] for f in candidate['Red Flags']]}
     """
     
     if not ai_client: return sym, f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."
 
-    prompt = f"Analyze {sym}.\n{context_data}\nFormat using standard bullet points (-). NO tables.\nProvide sections:\n{agent_instructions}"
+    prompt = f"""Analyze {sym}.
+    {context_data}
+    Format using standard bullet points (-). NO tables.
+    Provide sections:
+    {agent_instructions}
+    
+    For the FINAL VERDICT section, you MUST declare a definitive action: **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**. 
+    You MUST provide a data-driven justification citing the specific P/E, ROE, Debt/Equity, or Cash Conversion figures provided above to support your decision.
+    """
     
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
         for attempt in range(3):
@@ -525,7 +536,7 @@ def run_four_agent_deep_audit(f_data):
     6. Score: Piotroski: {f_data['f_score']}/9
     """
 
-    # FIXED: Re-engineered final verdict prompt to force a binary CLEAR PASS or CLEAR FAIL outcome
+    # FIXED: Re-engineered final verdict prompt to force BUY/SELL/WATCH/AVOID and cite data
     master_prompt = f"""
     You are an elite Institutional Investment Committee evaluating an Indian equity.
     {audit_context}
@@ -545,9 +556,9 @@ def run_four_agent_deep_audit(f_data):
     - Scrutinize cash flow authenticity, solvency, and Piotroski score. Give explicit PASS or FAIL verdict.
 
     ### FINAL COMMITTEE JUDGE VERDICT
-    - Final Verdict: You MUST evaluate all points and state either **CLEAR PASS** or **CLEAR FAIL**. Do not use "Watchlist" or "Hold". It must be a strict binary decision.
+    - Final Verdict: You MUST evaluate all points and declare a definitive action: **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**. Do not give ambiguous answers.
     - Final Score: X/10 against the 10-Point Checklist.
-    - Justification: Briefly explain the definitive reason for the Pass or Fail.
+    - Data-Driven Justification: Provide a robust justification explicitly citing the exact data provided above (e.g., specific P/E, ROE, Cash Conversion, Debt/Equity) to defend why this stock earned this specific rating.
     """
 
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
