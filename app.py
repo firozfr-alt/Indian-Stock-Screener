@@ -319,7 +319,7 @@ def fetch_dossier_parallel(candidate, strategy):
     return sym, "API rate limits reached. Try again shortly."
 
 # =========================================================
-# 6. BULLETPROOF PDF EXPORTERS (TABS 1-3 & TAB 4)
+# 6. BULLETPROOF PDF EXPORTERS
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -327,18 +327,15 @@ class MultibaggerPDF(FPDF):
         self.cell(0, 7, "INDIAN EQUITY RESEARCH", ln=True, align="C")
         self.ln(3)
 
-# NEW: Text Sanitizer Firewall. Prevents FPDF UnicodeEncodeError crashes.
 def clean_text_for_pdf(text):
     if not isinstance(text, str):
         text = str(text)
-    # Replaces smart quotes, long dashes, and rupees that crash the PDF engine
     replacements = {
         '₹': 'INR ', '—': '-', '–': '-', '’': "'", '‘': "'", '“': '"', '”': '"', 
         '•': '-', '…': '...', '**': '', '### ': '\n'
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
-    # Forces latin-1. Any weird emoji remaining is swapped to '?' to prevent crashing
     return text.encode('latin-1', 'replace').decode('latin-1')
 
 def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
@@ -528,6 +525,7 @@ def run_four_agent_deep_audit(f_data):
     6. Score: Piotroski: {f_data['f_score']}/9
     """
 
+    # FIXED: Re-engineered final verdict prompt to force a binary CLEAR PASS or CLEAR FAIL outcome
     master_prompt = f"""
     You are an elite Institutional Investment Committee evaluating an Indian equity.
     {audit_context}
@@ -535,20 +533,21 @@ def run_four_agent_deep_audit(f_data):
     Structure your briefing EXACTLY with these 5 markdown sections (NO tables, use bullet points):
 
     ### AGENT 1: GEMINI (Moat, Business Model & Profitability)
-    - Evaluate business model clarity, moat, and pricing power. Give explicit PASS/CAUTION/FAIL verdict.
+    - Evaluate business model clarity, moat, and pricing power. Give explicit PASS or FAIL verdict.
 
     ### AGENT 2: GROK (Catalysts & Real-World Reality Check)
-    - Reality-check industry tailwinds vs competitive disruption. Check for operator volume traps. Give explicit verdict.
+    - Reality-check industry tailwinds vs competitive disruption. Check for operator volume traps. Give explicit PASS or FAIL verdict.
 
     ### AGENT 3: CHATGPT (Mathematical Feasibility & Valuation)
-    - Audit ROE drivers and evaluate valuation margins. Give explicit verdict.
+    - Audit ROE drivers and evaluate valuation margins. Give explicit PASS or FAIL verdict.
 
     ### AGENT 4: CLAUDE (Forensic Adversary & Red Flags)
-    - Scrutinize cash flow authenticity, solvency, and Piotroski score. Give explicit verdict.
+    - Scrutinize cash flow authenticity, solvency, and Piotroski score. Give explicit PASS or FAIL verdict.
 
     ### FINAL COMMITTEE JUDGE VERDICT
-    - Consensus Classification: [STRONG BUY / QUALITY COMPOUNDER] or [WATCHLIST] or [REJECT / VALUE TRAP].
-    - Final Pass/Fail Score against the 10-Point Checklist.
+    - Final Verdict: You MUST evaluate all points and state either **CLEAR PASS** or **CLEAR FAIL**. Do not use "Watchlist" or "Hold". It must be a strict binary decision.
+    - Final Score: X/10 against the 10-Point Checklist.
+    - Justification: Briefly explain the definitive reason for the Pass or Fail.
     """
 
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
