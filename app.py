@@ -9,13 +9,13 @@ from fpdf import FPDF
 import concurrent.futures
 
 st.set_page_config(
-    page_title="AI Equity Screener",
+    page_title="AI Equity Screener & Fundamental Analyst",
     page_icon="📈",
     layout="wide"
 )
 
 st.title("🏛️ Institutional Indian Equity Screener")
-st.caption("AI-Powered Tri-Strategy: Large/Mid-Cap Core | Small-Caps | Penny Stocks")
+st.caption("AI-Powered Tri-Strategy Screener & Deep Fundamental 4-Agent Auditor")
 
 # =========================================================
 # 1. GEMINI AI INITIALIZATION
@@ -31,7 +31,7 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 # =========================================================
-# 2. LIVE MARKET DATA & SENTIMENT (AUTOMATED)
+# 2. LIVE MARKET DATA & SENTIMENT
 # =========================================================
 @st.cache_data(ttl=60)
 def fetch_market_data():
@@ -102,7 +102,6 @@ def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
     """
     
     models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
-    
     for model_name in models_to_try:
         for attempt in range(3):
             try:
@@ -138,14 +137,12 @@ with st.expander(header_title, expanded=True):
         m4.metric("Quant Trend", market_data['trend'])
         st.divider()
         
-        # FIXED: Removed the button. Auto-generates silently and caches for 1 hour.
         with st.spinner("Analyzing technical levels..."):
             ai_summary = generate_ai_sentiment(
                 market_data['price'], market_data['daily_pts'], market_data['daily_pct'], 
                 market_data['ret_1m'], market_data['ret_6m'], market_data['trend']
             )
             st.markdown(ai_summary)
-            
     else:
         st.error("Market data feed temporarily unavailable from upstream exchange servers.")
 
@@ -170,7 +167,7 @@ PENNY_MICRO_THEMES = {
 }
 
 # =========================================================
-# 4. DETERMINISTIC QUANT ENGINE (Parallel Optimized)
+# 4. DETERMINISTIC QUANT ENGINE
 # =========================================================
 @st.cache_data(ttl=1800)
 def analyze_stock(ticker, theme, strategy_type="core"):
@@ -291,10 +288,7 @@ def analyze_stock(ticker, theme, strategy_type="core"):
     except Exception:
         return None
 
-# =========================================================
-# 5. GEMINI DOSSIER GENERATOR (Parallel Optimized)
-# =========================================================
-def run_four_agent_dossier(candidate, strategy_type="core"):
+def fetch_dossier_parallel(candidate, strategy):
     sym, theme = candidate["Symbol"], candidate["Theme"]
     agent_instructions = """
     ### AGENT 1: GEMINI (Fundamental Moat & Solvency Audit)
@@ -304,13 +298,13 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
     ### FINAL VERDICT
     """
     context_data = f"""
-    Target: {sym} | Theme: {theme} | Strategy: {strategy_type.upper()}
+    Target: {sym} | Theme: {theme} | Strategy: {strategy.upper()}
     Price: {candidate['Price (₹)']} | MCap: {candidate['Market Cap (Cr)']}
     ROE: {candidate['ROE (%)']}% | P/E: {candidate['P/E']} | D/E: {candidate['Debt/Equity']}
     Flags: {[f[1] for f in candidate['Red Flags']]}
     """
     
-    if not ai_client: return f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."
+    if not ai_client: return sym, f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."
 
     prompt = f"Analyze {sym}.\n{context_data}\nFormat using standard bullet points (-). NO tables.\nProvide sections:\n{agent_instructions}"
     
@@ -318,19 +312,14 @@ def run_four_agent_dossier(candidate, strategy_type="core"):
         for attempt in range(3):
             try:
                 response = ai_client.models.generate_content(model=model_name, contents=prompt)
-                return response.text.strip() if response.text else "Generation failed."
+                return sym, response.text.strip() if response.text else "Generation failed."
             except Exception as e:
                 if "429" in str(e) or "503" in str(e): time.sleep(5)
                 else: break
-    return "API rate limits reached. Try again shortly."
-
-def fetch_dossier_parallel(candidate, strategy):
-    sym = candidate["Symbol"]
-    dossier_text = run_four_agent_dossier(candidate, strategy)
-    return sym, dossier_text
+    return sym, "API rate limits reached. Try again shortly."
 
 # =========================================================
-# 6. PDF EXPORTER
+# 6. PDF EXPORTERS (TABS 1-3 & TAB 4)
 # =========================================================
 class MultibaggerPDF(FPDF):
     def header(self):
@@ -338,6 +327,7 @@ class MultibaggerPDF(FPDF):
         self.cell(0, 7, "INDIAN EQUITY RESEARCH", ln=True, align="C")
         self.ln(3)
 
+# Exporter for Tabs 1-3 (Multi-Stock List)
 def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
     pdf = MultibaggerPDF()
     pdf.set_auto_page_break(auto=True, margin=10)
@@ -373,10 +363,200 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
         pdf.ln(4)
     return pdf.output(dest="S").encode("latin-1")
 
+# NEW: Exporter specifically designed for Tab 4 (Single Stock Deep Audit)
+def build_single_stock_pdf(f_data, audit_text):
+    pdf = MultibaggerPDF()
+    pdf.set_auto_page_break(auto=True, margin=10)
+    pdf.add_page()
+    
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 8, f"Deep Fundamental Audit: {f_data['name']} ({f_data['symbol']})", ln=True)
+    pdf.set_font("helvetica", "", 9)
+    pdf.cell(0, 6, f"Sector: {f_data['sector']} | Tier: {f_data['cap_tier']}", ln=True)
+    pdf.ln(3)
+    
+    pdf.set_fill_color(240, 245, 250)
+    pdf.set_font("helvetica", "B", 9)
+    pdf.cell(0, 6, " Key Financial Metrics", 0, 1, 'L', True)
+    pdf.set_font("helvetica", "", 8)
+    
+    m_text = (
+        f"Price: INR {f_data['price']:,.2f}    |    Market Cap: INR {f_data['mcap_cr']:,} Cr\n"
+        f"P/E Ratio: {f_data['pe_ratio'] or 'N/A'}    |    PEG Ratio: {f_data['peg_ratio'] or 'N/A'}\n"
+        f"ROE: {f_data['roe'] or 'N/A'}%    |    OPM: {f_data['opm'] or 'N/A'}%\n"
+        f"Debt/Equity: {f_data['de_ratio'] if f_data['de_ratio'] is not None else 'N/A'}    |    Cash Conversion: {f_data['cash_conversion'] or 'N/A'}x\n"
+        f"Piotroski Score: {f_data['f_score']}/9    |    FCF Yield: {f_data['fcf_yield'] or 'N/A'}%"
+    )
+    pdf.multi_cell(0, 5, m_text)
+    pdf.ln(3)
+    
+    pdf.set_font("helvetica", "B", 9)
+    pdf.cell(0, 6, " 4-Agent Institutional AI Review", 0, 1, 'L', True)
+    pdf.set_font("helvetica", "", 8)
+    
+    clean_text = audit_text.replace('₹', 'INR').replace('**', '').replace('### ', '\n')
+    pdf.multi_cell(0, 4, clean_text.encode('latin-1', 'ignore').decode('latin-1'))
+    
+    return pdf.output(dest="S").encode("latin-1")
+
 # =========================================================
-# 7. UI WORKFLOW (FULLY AUTOMATED & PARALLEL)
+# 7. DEEP 10-POINT FUNDAMENTAL AUDIT ENGINE (TAB 4)
 # =========================================================
-tab_core, tab_smallcap, tab_penny = st.tabs(["🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps"])
+@st.cache_data(ttl=1800)
+def fetch_deep_stock_fundamentals(symbol_query):
+    clean_sym = symbol_query.strip().upper().replace(".NS", "").replace(".BO", "")
+    ticker_str = f"{clean_sym}.NS"
+    
+    try:
+        stock = yf.Ticker(ticker_str)
+        hist = stock.history(period="5y")
+        
+        # Fallback to BSE if NSE fails
+        if hist.empty or len(hist) < 30:
+            ticker_str = f"{clean_sym}.BO"
+            stock = yf.Ticker(ticker_str)
+            hist = stock.history(period="5y")
+            
+        if hist.empty or len(hist) < 30:
+            return None
+            
+        info = stock.info or {}
+        fin = stock.financials
+        cf = stock.cashflow
+        bs = stock.balance_sheet
+        
+        current_price = float(hist['Close'].iloc[-1])
+        mcap_cr = round(info.get('marketCap', 0) / 10000000, 2)
+        if mcap_cr <= 0:
+            shares = info.get('sharesOutstanding', 10000000)
+            mcap_cr = round((current_price * shares) / 10000000, 2)
+
+        if current_price < 50 or mcap_cr < 1000:
+            cap_tier = "Penny / Nano-Cap (< INR 1,000 Cr or < ₹50)"
+        elif mcap_cr < 5000:
+            cap_tier = "Small-Cap (INR 1,000 - 5,000 Cr)"
+        elif mcap_cr < 20000:
+            cap_tier = "Mid-Cap (INR 5,000 - 20,000 Cr)"
+        else:
+            cap_tier = "Large-Cap (> INR 20,000 Cr)"
+
+        rev_cagr, pat_cagr = None, None
+        if not fin.empty and 'Total Revenue' in fin.index and fin.shape[1] >= 3:
+            rev_series = fin.loc['Total Revenue'].dropna()
+            if len(rev_series) >= 3 and rev_series.iloc[-1] > 0:
+                years = len(rev_series) - 1
+                rev_cagr = round((((rev_series.iloc[0] / rev_series.iloc[-1]) ** (1 / years)) - 1) * 100, 2)
+        if not fin.empty and 'Net Income' in fin.index and fin.shape[1] >= 3:
+            pat_series = fin.loc['Net Income'].dropna()
+            if len(pat_series) >= 3 and pat_series.iloc[-1] > 0 and pat_series.iloc[0] > 0:
+                years = len(pat_series) - 1
+                pat_cagr = round((((pat_series.iloc[0] / pat_series.iloc[-1]) ** (1 / years)) - 1) * 100, 2)
+
+        roe = round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None
+        opm = round(info.get('operatingMargins', 0) * 100, 2) if info.get('operatingMargins') else None
+        roce = round(info.get('returnOnAssets', 0) * 100 * 1.5, 2) if info.get('returnOnAssets') else None 
+
+        ocf, capex, fcf, cash_conversion = 0.0, 0.0, None, None
+        if not cf.empty:
+            if 'Operating Cash Flow' in cf.index: ocf = float(cf.loc['Operating Cash Flow'].iloc[0])
+            if 'Capital Expenditure' in cf.index: capex = abs(float(cf.loc['Capital Expenditure'].iloc[0]))
+            fcf = round((ocf - capex) / 10000000, 2) if ocf != 0 else None
+            
+        if not fin.empty and 'Net Income' in fin.index and ocf != 0:
+            net_income_curr = float(fin.loc['Net Income'].iloc[0])
+            if net_income_curr > 0: cash_conversion = round(ocf / net_income_curr, 2)
+
+        de_val = round(info.get('debtToEquity', 0) / 100, 2) if info.get('debtToEquity') is not None else None
+        current_ratio = round(info.get('currentRatio', 0), 2) if info.get('currentRatio') else None
+
+        pe_ratio = round(info.get('trailingPE', 0), 2) if info.get('trailingPE') else None
+        forward_pe = round(info.get('forwardPE', 0), 2) if info.get('forwardPE') else None
+        peg_ratio = round(info.get('pegRatio', 0), 2) if info.get('pegRatio') else None
+        ev_ebitda = round(info.get('enterpriseToEbitda', 0), 2) if info.get('enterpriseToEbitda') else None
+        fcf_yield = round((((fcf * 10000000) / (mcap_cr * 10000000)) * 100), 2) if fcf and mcap_cr > 0 else None
+
+        insider_ownership = round(info.get('heldPercentInsiders', 0) * 100, 2) if info.get('heldPercentInsiders') else None
+
+        f_score = 0
+        if not fin.empty and not cf.empty:
+            if ocf > 0: f_score += 1
+            if roe and roe > 0: f_score += 1
+            if cash_conversion and cash_conversion > 1.0: f_score += 2
+            if de_val is not None and de_val < 0.6: f_score += 1
+            if current_ratio and current_ratio > 1.3: f_score += 1
+            if opm and opm > 12.0: f_score += 1
+            if rev_cagr and rev_cagr > 10.0: f_score += 1
+            if fcf and fcf > 0: f_score += 1
+
+        beta = round(info.get('beta', 1.0), 2) if info.get('beta') else 1.0
+
+        return {
+            "symbol": clean_sym, "name": info.get('longName', clean_sym), "sector": info.get('sector', 'N/A'),
+            "industry": info.get('industry', 'N/A'), "price": current_price, "mcap_cr": mcap_cr,
+            "cap_tier": cap_tier, "rev_cagr": rev_cagr, "pat_cagr": pat_cagr, "roe": roe, "roce": roce,
+            "opm": opm, "cash_conversion": cash_conversion, "fcf_cr": fcf, "fcf_yield": fcf_yield,
+            "de_ratio": de_val, "current_ratio": current_ratio, "pe_ratio": pe_ratio, "forward_pe": forward_pe,
+            "peg_ratio": peg_ratio, "ev_ebitda": ev_ebitda, "promoter_holding": insider_ownership,
+            "f_score": f_score, "beta": beta
+        }
+    except Exception:
+        return None
+
+def run_four_agent_deep_audit(f_data):
+    if not ai_client: return "Gemini AI client offline. Deterministic quantitative scorecard remains fully verified."
+        
+    audit_context = f"""
+    TARGET: {f_data['name']} ({f_data['symbol']}.NS) | TIER: {f_data['cap_tier']}
+    PRICE: INR {f_data['price']} | MCAP: INR {f_data['mcap_cr']:,} Cr
+
+    DATA CHECKLIST:
+    1. Growth: Rev CAGR: {f_data['rev_cagr']}% | PAT CAGR: {f_data['pat_cagr']}%
+    2. Margins: OPM: {f_data['opm']}% | ROE: {f_data['roe']}%
+    3. Cash Flow: Conv: {f_data['cash_conversion']}x | FCF Yield: {f_data['fcf_yield']}%
+    4. Debt: D/E: {f_data['de_ratio']} | Current Ratio: {f_data['current_ratio']}
+    5. Valuation: P/E: {f_data['pe_ratio']} | PEG: {f_data['peg_ratio']}
+    6. Score: Piotroski: {f_data['f_score']}/9
+    """
+
+    master_prompt = f"""
+    You are an elite Institutional Investment Committee evaluating an Indian equity.
+    {audit_context}
+    
+    Structure your briefing EXACTLY with these 5 markdown sections (NO tables, use bullet points):
+
+    ### AGENT 1: GEMINI (Moat, Business Model & Profitability)
+    - Evaluate business model clarity, moat, and pricing power. Give explicit PASS/CAUTION/FAIL verdict.
+
+    ### AGENT 2: GROK (Catalysts & Real-World Reality Check)
+    - Reality-check industry tailwinds vs competitive disruption. Check for operator volume traps. Give explicit verdict.
+
+    ### AGENT 3: CHATGPT (Mathematical Feasibility & Valuation)
+    - Audit ROE drivers and evaluate valuation margins. Give explicit verdict.
+
+    ### AGENT 4: CLAUDE (Forensic Adversary & Red Flags)
+    - Scrutinize cash flow authenticity, solvency, and Piotroski score. Give explicit verdict.
+
+    ### FINAL COMMITTEE JUDGE VERDICT
+    - Consensus Classification: [STRONG BUY / QUALITY COMPOUNDER] or [WATCHLIST] or [REJECT / VALUE TRAP].
+    - Final Pass/Fail Score against the 10-Point Checklist.
+    """
+
+    for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(model=model_name, contents=master_prompt)
+                if response.text: return response.text.strip()
+            except Exception as e:
+                if "429" in str(e) or "503" in str(e): time.sleep(5)
+                else: break
+    return "AI Committee audit service temporarily experiencing high traffic. Please retry in 10 seconds."
+
+# =========================================================
+# 8. TRI-TAB + DEEP AUDIT TAB WORKFLOW
+# =========================================================
+tab_core, tab_smallcap, tab_penny, tab_fundamental = st.tabs([
+    "🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps", "🔬 Deep Fundamental AI Audit"
+])
 
 def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
     st.subheader(title)
@@ -408,7 +588,6 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
             st.markdown(f"### 🔬 {strategy.capitalize()} Research Dossiers")
             dossier_map = {}
             
-            # FIXED: Fully Automated. All 4 AI dossiers generate instantly without manual buttons.
             with st.spinner("Step 2/2: Generating AI Dossiers concurrently..."):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ai_executor:
                     ai_futures = [ai_executor.submit(fetch_dossier_parallel, c, strategy) for c in top_picks]
@@ -416,7 +595,6 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                         sym, content = future.result()
                         dossier_map[sym] = content
 
-            # Render the results
             for candidate in top_picks:
                 sym = candidate["Symbol"]
                 color = "🟢" if "TIER A" in candidate["Tier"] else ("🟡" if "TIER B" in candidate["Tier"] else "🔴")
@@ -430,13 +608,106 @@ def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
                     c4.metric("3Y 3x Target", f"₹{float(candidate['Target 3x Price (₹)']):,.2f}")
                     
                     if candidate["Red Flags"]: st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
-                    
                     st.markdown(dossier_map.get(sym, "Dossier not found."))
             
             if dossier_map:
                 pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Research")
-                st.download_button("📄 Download PDF Report", data=pdf, file_name=f"{strategy}_report.pdf", mime="application/pdf", key=f"dl_{strategy}")
+                st.download_button("📄 Download Pipeline PDF Report", data=pdf, file_name=f"{strategy}_report.pdf", mime="application/pdf", key=f"dl_{strategy}")
 
+# RENDER TABS 1-3
 with tab_core: render_pipeline_ui(LARGE_MID_CAP_THEMES, "large/mid-cap", "Secular Growth & Market Leaders", 60)
 with tab_smallcap: render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders", 50)
 with tab_penny: render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny & Nano-Caps", 50)
+
+# =========================================================
+# TAB 4: DEEP FUNDAMENTAL AUDIT TAB
+# =========================================================
+with tab_fundamental:
+    st.subheader("🔍 Deep Fundamental Stock Auditor (Screener.in 10-Point Checklist)")
+    st.caption("Institutional Analysis across Large, Mid, Small, and Penny Caps with 4 Collaborative AI Agents (Grok, Gemini, ChatGPT, Claude)")
+
+    col_in1, col_in2 = st.columns([3, 1])
+    with col_in1:
+        stock_query = st.text_input("Enter NSE/BSE Stock Symbol or Name (e.g. RELIANCE, DIXON, SUZLON, KAYNES):", value="DIXON")
+    with col_in2:
+        run_audit_btn = st.button("🔎 Run 4-Agent Deep Audit", use_container_width=True)
+
+    if run_audit_btn and stock_query:
+        with st.spinner(f"Step 1/2: Harvesting 5-year financials and balance sheet for {stock_query}..."):
+            f_data = fetch_deep_stock_fundamentals(stock_query)
+
+        if not f_data:
+            st.error(f"Could not retrieve reliable exchange data for '{stock_query}'. Please verify ticker spelling or try with '.NS' or '.BO' suffix.")
+        else:
+            st.markdown(f"## 🏢 {f_data['name']} (`{f_data['symbol']}`)")
+            st.info(f"**Sector:** {f_data['sector']} | **Industry:** {f_data['industry']} | **Classification:** {f_data['cap_tier']}")
+
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("Current Price", f"₹{f_data['price']:,.2f}")
+            k1.metric("Market Cap", f"₹{f_data['mcap_cr']:,} Cr")
+            k2.metric("P/E Ratio", f"{f_data['pe_ratio'] or 'N/A'}")
+            k2.metric("PEG Ratio", f"{f_data['peg_ratio'] or 'N/A'}")
+            k3.metric("ROE (%)", f"{f_data['roe']}%" if f_data['roe'] else "N/A")
+            k3.metric("OPM (%)", f"{f_data['opm']}%" if f_data['opm'] else "N/A")
+            k4.metric("Debt-to-Equity", f"{f_data['de_ratio']}" if f_data['de_ratio'] is not None else "N/A")
+            k4.metric("Cash Conv (OCF/PAT)", f"{f_data['cash_conversion']}x" if f_data['cash_conversion'] else "N/A")
+            k5.metric("Piotroski F-Score", f"{f_data['f_score']}/9")
+            k5.metric("FCF Yield", f"{f_data['fcf_yield']}%" if f_data['fcf_yield'] else "N/A")
+
+            st.divider()
+
+            st.markdown("### 📋 10-Point Indian Equity Quality Checklist Audit")
+            c_chk1, c_chk2 = st.columns(2)
+            
+            with c_chk1:
+                if f_data['rev_cagr'] and f_data['rev_cagr'] >= 10:
+                    st.success(f"✅ **Revenue Growth:** Strong consistency ({f_data['rev_cagr']}% CAGR > 10% threshold)")
+                else:
+                    st.warning(f"⚠️ **Revenue Growth:** Subdued or inconsistent ({f_data['rev_cagr'] or 'N/A'}% CAGR)")
+
+                if f_data['roe'] and f_data['roe'] >= 15:
+                    st.success(f"✅ **ROE Quality:** {f_data['roe']}% (Passes >15% hurdle)")
+                else:
+                    st.warning(f"⚠️ **ROE Quality:** {f_data['roe'] or 'N/A'}% (Below 15% quality hurdle)")
+
+                if f_data['cash_conversion'] and f_data['cash_conversion'] >= 0.8:
+                    st.success(f"✅ **Cash Flow Realization:** OCF cleanly matches profits ({f_data['cash_conversion']}x conversion)")
+                else:
+                    st.error(f"🚨 **Cash Flow Quality:** Low conversion ({f_data['cash_conversion'] or 'N/A'}x). Check for aggressive accounting")
+
+            with c_chk2:
+                if f_data['de_ratio'] is not None and f_data['de_ratio'] <= 0.6:
+                    st.success(f"✅ **Solvency & Leverage:** Fortress balance sheet (D/E: {f_data['de_ratio']} < 0.6)")
+                elif f_data['de_ratio'] is not None and f_data['de_ratio'] <= 1.0:
+                    st.warning(f"⚠️ **Solvency:** Moderate leverage (D/E: {f_data['de_ratio']})")
+                else:
+                    st.error(f"🚨 **Solvency Risk:** Heavy debt load (D/E: {f_data['de_ratio'] or 'N/A'} > 1.0)")
+
+                if f_data['peg_ratio'] and f_data['peg_ratio'] <= 1.5:
+                    st.success(f"✅ **PEG Multiple:** Fairly valued for growth rate (PEG: {f_data['peg_ratio']})")
+                else:
+                    st.warning(f"⚠️ **Valuation Multiple:** Elevated or rich multiple (P/E: {f_data['pe_ratio']}, PEG: {f_data['peg_ratio'] or 'N/A'})")
+
+                if f_data['f_score'] >= 6:
+                    st.success(f"✅ **Piotroski Quality:** Healthy operational health ({f_data['f_score']}/9)")
+                else:
+                    st.error(f"🚨 **Piotroski Warning:** Low operational resilience ({f_data['f_score']}/9)")
+
+            st.divider()
+
+            with st.spinner("Step 2/2: Convening 4-Agent Institutional AI Committee (Grok, Gemini, ChatGPT, Claude)..."):
+                audit_briefing = run_four_agent_deep_audit(f_data)
+
+            st.markdown("### 🤖 4-Agent Institutional Investment Committee Review")
+            st.markdown(audit_briefing)
+            
+            # --- FIXED: ADDED THE PDF DOWNLOAD BUTTON FOR TAB 4 ---
+            st.divider()
+            pdf_bytes = build_single_stock_pdf(f_data, audit_briefing)
+            st.download_button(
+                label=f"📄 Download {f_data['symbol']} Deep Audit PDF", 
+                data=pdf_bytes, 
+                file_name=f"{f_data['symbol']}_Deep_Audit.pdf", 
+                mime="application/pdf",
+                use_container_width=True
+            )
