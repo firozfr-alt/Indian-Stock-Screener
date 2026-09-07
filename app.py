@@ -15,7 +15,7 @@ st.set_page_config(
 )
 
 st.title("🏛️ Institutional Indian Equity Screener")
-st.caption("AI-Powered Tri-Strategy Screener & Deep Fundamental 4-Agent Auditor")
+st.caption("AI-Powered Tri-Strategy Screener & Autonomous Growth Hunter")
 
 # =========================================================
 # 1. GEMINI AI INITIALIZATION
@@ -147,7 +147,7 @@ with st.expander(header_title, expanded=True):
         st.error("Market data feed temporarily unavailable from upstream exchange servers.")
 
 # =========================================================
-# 3. DEFINED UNIVERSES PER STRATEGY
+# 3. STRATEGY UNIVERSES
 # =========================================================
 LARGE_MID_CAP_THEMES = {
     "EMS & Electronics Manufacturing": ["DIXON.NS", "KAYNES.NS", "SYRMA.NS", "AMBER.NS"],
@@ -165,6 +165,20 @@ PENNY_MICRO_THEMES = {
     "High-Volume Penny Stocks (< INR 50)": ["SUZLON.NS", "RPOWER.NS", "JPPOWER.NS", "YESBANK.NS", "IDEA.NS", "GTLINFRA.NS", "FCSSOFT.NS"],
     "Nano-Cap Turnarounds (< INR 1,000 Cr)": ["VIKASLIFE.NS", "URJA.NS", "RENUKA.NS", "HCC.NS", "IFCI.NS", "SOUTHBANK.NS"]
 }
+
+# PRE-CURATED MULTI-CAP HIGH-GROWTH UNIVERSE (FOR TAB 5)
+AUTONOMOUS_GROWTH_UNIVERSE = [
+    ("DIXON.NS", "Large/Mid EMS", "core"),
+    ("HAL.NS", "Large Cap Defense", "core"),
+    ("KAYNES.NS", "Mid-Cap Compounder", "core"),
+    ("KPIGREEN.NS", "Mid-Cap Green Energy", "core"),
+    ("MARKSANS.NS", "Small-Cap Pharma", "smallcap"),
+    ("ZENTEC.NS", "Small-Cap Defense Tech", "smallcap"),
+    ("GENUSPOWER.NS", "Small-Cap Smart Metering", "smallcap"),
+    ("SUZLON.NS", "Turnaround Clean Energy", "penny"),
+    ("RPOWER.NS", "Infrastructure Turnaround", "penny"),
+    ("HCC.NS", "Engineering Turnaround", "penny")
+]
 
 # =========================================================
 # 4. DETERMINISTIC QUANT ENGINE
@@ -314,8 +328,10 @@ def fetch_dossier_parallel(candidate, strategy):
     Provide sections:
     {agent_instructions}
     
-    For the FINAL VERDICT section, you MUST declare a definitive action: **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**. 
-    You MUST provide a data-driven justification explicitly citing the P/E, ROE, Debt/Equity, or Cash Conversion figures provided above to support your decision.
+    For the FINAL VERDICT section:
+    - Final Verdict: You MUST declare a definitive action: **[STRONG BUY]**, **[BUY]**, **[WATCH]**, or **[AVOID]**.
+    - Data Justification: Explicitly cite the P/E, ROE, Debt/Equity, or Cash Conversion to support your decision.
+    - Optimal Holding Period: State the explicit recommended holding timeframe (e.g., 6-12 Months, 1-3 Years, 3-5 Years Compounder) and justify why this exact period is required for the thesis to play out.
     """
     
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
@@ -428,7 +444,6 @@ def fetch_deep_stock_fundamentals(symbol_query):
         stock = yf.Ticker(ticker_str)
         hist = stock.history(period="5y")
         
-        # Fallback to BSE if NSE fails
         if hist.empty or len(hist) < 30:
             ticker_str = f"{clean_sym}.BO"
             stock = yf.Ticker(ticker_str)
@@ -442,10 +457,8 @@ def fetch_deep_stock_fundamentals(symbol_query):
         cf = stock.cashflow
         bs = stock.balance_sheet
         
-        # FIXED: Drop any NaN rows from Yahoo Finance before grabbing the last price
         close_series = hist['Close'].dropna()
-        if close_series.empty:
-            return None
+        if close_series.empty: return None
         current_price = float(close_series.iloc[-1])
         
         mcap_cr = round(info.get('marketCap', 0) / 10000000, 2)
@@ -474,7 +487,6 @@ def fetch_deep_stock_fundamentals(symbol_query):
                 years = len(pat_series) - 1
                 pat_cagr = round((((pat_series.iloc[0] / pat_series.iloc[-1]) ** (1 / years)) - 1) * 100, 2)
 
-        # FIXED: Added pd.isna() checks to handle raw math 'nan' returns from the API
         roe_raw = info.get('returnOnEquity')
         roe = round(roe_raw * 100, 2) if roe_raw is not None and not pd.isna(roe_raw) else None
         
@@ -512,16 +524,23 @@ def fetch_deep_stock_fundamentals(symbol_query):
 
         insider_ownership = round(info.get('heldPercentInsiders', 0) * 100, 2) if info.get('heldPercentInsiders') else None
 
+        # SECTOR-AWARE PIOTROSKI F-SCORE FIX
+        is_financial = "Financial" in str(info.get('sector', '')) or "Bank" in str(info.get('industry', '')) or "Insurance" in str(info.get('industry', ''))
         f_score = 0
-        if not fin.empty and not cf.empty:
+        if not fin.empty:
             if ocf > 0: f_score += 1
             if roe and roe > 0: f_score += 1
-            if cash_conversion and cash_conversion > 1.0: f_score += 2
-            if de_val is not None and de_val < 0.6: f_score += 1
-            if current_ratio and current_ratio > 1.3: f_score += 1
+            if rev_cagr and rev_cagr > 10.0: f_score += 2
             if opm and opm > 12.0: f_score += 1
-            if rev_cagr and rev_cagr > 10.0: f_score += 1
-            if fcf and fcf > 0: f_score += 1
+            
+            if not is_financial:
+                if cash_conversion and cash_conversion > 1.0: f_score += 2
+                if de_val is not None and de_val < 0.6: f_score += 1
+                if current_ratio and current_ratio > 1.3: f_score += 1
+            else:
+                # Give fair credit to financial firms based on profitability and growth
+                if roe and roe > 12.0: f_score += 2
+                if roe and roe > 18.0: f_score += 2
 
         beta = round(info.get('beta', 1.0), 2) if info.get('beta') else 1.0
 
@@ -532,10 +551,9 @@ def fetch_deep_stock_fundamentals(symbol_query):
             "opm": opm, "cash_conversion": cash_conversion, "fcf_cr": fcf, "fcf_yield": fcf_yield,
             "de_ratio": de_val, "current_ratio": current_ratio, "pe_ratio": pe_ratio, "forward_pe": forward_pe,
             "peg_ratio": peg_ratio, "ev_ebitda": ev_ebitda, "promoter_holding": insider_ownership,
-            "f_score": f_score, "beta": beta
+            "f_score": min(f_score, 9), "beta": beta
         }
-    except Exception as e:
-        print(f"Error in deep fundamental analysis: {e}")
+    except Exception:
         return None
 
 def run_four_agent_deep_audit(f_data):
@@ -573,10 +591,11 @@ def run_four_agent_deep_audit(f_data):
     - Scrutinize cash flow authenticity, solvency, and Piotroski score. Give explicit PASS or FAIL verdict.
 
     ### FINAL COMMITTEE JUDGE VERDICT
-    - Final Verdict: You MUST evaluate all points and state either **CLEAR PASS** or **CLEAR FAIL**. Do not use "Watchlist" or "Hold". It must be a strict binary decision.
-    - Final Action: Declare **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**.
+    - Final Verdict: You MUST evaluate all points and state either **CLEAR PASS** or **CLEAR FAIL**. Do not use "Watchlist" or "Hold".
+    - Final Action: Declare **[STRONG BUY]**, **[BUY]**, **[WATCH]**, or **[AVOID]**.
     - Final Score: X/10 against the 10-Point Checklist.
-    - Data-Driven Justification: Briefly explain the definitive reason for the Pass or Fail, explicitly citing the specific metrics provided above (e.g. ROE, P/E, Cash Conversion, etc.)
+    - Data-Driven Justification: State the definitive reason for the verdict, citing explicit metrics (ROE, P/E, D/E, etc.).
+    - Recommended Holding Period: State the recommended holding horizon (e.g. 6-12 Months, 1-3 Years, 3-5 Years Compounder) and the investment thesis supporting it.
     """
 
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
@@ -590,10 +609,14 @@ def run_four_agent_deep_audit(f_data):
     return "AI Committee audit service temporarily experiencing high traffic. Please retry in 10 seconds."
 
 # =========================================================
-# 8. TRI-TAB + DEEP AUDIT TAB WORKFLOW
+# 8. WORKFLOW TABS
 # =========================================================
-tab_core, tab_smallcap, tab_penny, tab_fundamental = st.tabs([
-    "🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps", "🔬 Deep Fundamental AI Audit"
+tab_core, tab_smallcap, tab_penny, tab_fundamental, tab_hunter = st.tabs([
+    "🏛️ Large & Mid-Cap Core", 
+    "🚀 Small-Caps", 
+    "⚠️ Penny & Micro-Caps", 
+    "🔬 Deep Fundamental AI Audit", 
+    "🏆 Autonomous Growth Hunter"
 ])
 
 def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
@@ -748,3 +771,67 @@ with tab_fundamental:
                 mime="application/pdf",
                 use_container_width=True
             )
+
+# =========================================================
+# TAB 5: AUTONOMOUS GROWTH HUNTER (ZERO MANUAL TYPING)
+# =========================================================
+with tab_hunter:
+    st.subheader("🏆 Autonomous High-Growth Compounder Hunter")
+    st.caption("Zero typing required. Automatically scans across Large, Mid, Small, and Micro/Penny caps to find top-quality compounders with recommended holding horizons.")
+
+    if st.button("🚀 Run Autonomous Market Hunter", key="btn_run_hunter"):
+        with st.spinner("Step 1/2: Quant Scanning Across Multi-Cap Growth Universe..."):
+            tasks = [(sym, theme, strat) for sym, theme, strat in AUTONOMOUS_GROWTH_UNIVERSE]
+            
+            all_cands = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(analyze_stock, t[0], t[1], t[2]) for t in tasks]
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    if res: all_cands.append(res)
+
+            df = pd.DataFrame(all_cands)
+
+        if not df.empty:
+            df_sorted = df.sort_values(by=["Overall Score (/100)", "3x Feasibility (/100)"], ascending=[False, False]).reset_index(drop=True)
+            
+            st.dataframe(df_sorted[[
+                "Symbol", "Theme", "Price (₹)", "Market Cap (Cr)", "P/E", "Debt/Equity", "ROE (%)", "Overall Score (/100)", "Tier"
+            ]], use_container_width=True)
+
+            top_hunter_picks = df_sorted.head(4).to_dict('records')
+            dossier_map = {}
+
+            st.markdown("### 🔬 4-Agent Committee Dossiers & Recommended Holding Horizons")
+            with st.spinner("Step 2/2: Generating Institutional Consensus & Timeframes..."):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ai_executor:
+                    ai_futures = [ai_executor.submit(fetch_dossier_parallel, c, "core") for c in top_hunter_picks]
+                    for future in concurrent.futures.as_completed(ai_futures):
+                        sym, content = future.result()
+                        dossier_map[sym] = content
+
+            for candidate in top_hunter_picks:
+                sym = candidate["Symbol"]
+                color = "🟢" if "TIER A" in candidate["Tier"] else ("🟡" if "TIER B" in candidate["Tier"] else "🔴")
+                
+                with st.expander(f"{color} {sym} — Score: {candidate['Overall Score (/100)']}/100", expanded=True):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Current Price", f"₹{float(candidate['Price (₹)']):,.2f}")
+                    c1.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
+                    c2.metric("Debt-to-Equity", f"{candidate['Debt/Equity']}")
+                    c3.metric("ROE (%)", f"{candidate['ROE (%)']}%")
+                    c4.metric("3Y 3x Target", f"₹{float(candidate['Target 3x Price (₹)']):,.2f}")
+                    
+                    if candidate["Red Flags"]: 
+                        st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
+                    st.markdown(dossier_map.get(sym, "Dossier not found."))
+
+            if dossier_map:
+                pdf = build_pdf_report(top_hunter_picks, dossier_map, "Autonomous High-Growth Hunter Report")
+                st.download_button(
+                    "📄 Download Hunter Research PDF", 
+                    data=pdf, 
+                    file_name="Autonomous_Growth_Hunter.pdf", 
+                    mime="application/pdf", 
+                    key="dl_hunter"
+                )
