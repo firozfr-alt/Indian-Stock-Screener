@@ -50,14 +50,14 @@ def fetch_market_data():
             
         live_hist = nifty.history(period="1d", interval="2m")
         if not live_hist.empty:
-            current_price = float(live_hist['Close'].iloc[-1])
+            current_price = float(live_hist['Close'].dropna().iloc[-1])
         else:
-            current_price = float(hist['Close'].iloc[-1])
+            current_price = float(hist['Close'].dropna().iloc[-1])
             
         if not live_hist.empty and live_hist.index[-1].date() > hist.index[-1].date():
-            prev_price = float(hist['Close'].iloc[-1])
+            prev_price = float(hist['Close'].dropna().iloc[-1])
         else:
-            prev_price = float(hist['Close'].iloc[-2])
+            prev_price = float(hist['Close'].dropna().iloc[-2])
             
         daily_change_pts = current_price - prev_price
         daily_change_pct = (daily_change_pts / prev_price) * 100
@@ -290,6 +290,7 @@ def analyze_stock(ticker, theme, strategy_type="core"):
 
 def fetch_dossier_parallel(candidate, strategy):
     sym, theme = candidate["Symbol"], candidate["Theme"]
+    
     agent_instructions = """
     ### AGENT 1: GEMINI (Fundamental Moat & Solvency Audit)
     ### AGENT 2: GROK (Operator Manipulation & Order Book)
@@ -301,12 +302,21 @@ def fetch_dossier_parallel(candidate, strategy):
     Target: {sym} | Theme: {theme} | Strategy: {strategy.upper()}
     Price: {candidate['Price (₹)']} | MCap: {candidate['Market Cap (Cr)']}
     ROE: {candidate['ROE (%)']}% | P/E: {candidate['P/E']} | D/E: {candidate['Debt/Equity']}
+    Cash Conv: {candidate['Cash Conv (OCF/PAT)']}
     Flags: {[f[1] for f in candidate['Red Flags']]}
     """
     
     if not ai_client: return sym, f"**Deterministic Audit:** Scored {candidate['Overall Score (/100)']}/100."
 
-    prompt = f"Analyze {sym}.\n{context_data}\nFormat using standard bullet points (-). NO tables.\nProvide sections:\n{agent_instructions}"
+    prompt = f"""Analyze {sym}.
+    {context_data}
+    Format using standard bullet points (-). NO tables.
+    Provide sections:
+    {agent_instructions}
+    
+    For the FINAL VERDICT section, you MUST declare a definitive action: **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**. 
+    You MUST provide a data-driven justification explicitly citing the P/E, ROE, Debt/Equity, or Cash Conversion figures provided above to support your decision.
+    """
     
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
         for attempt in range(3):
@@ -432,7 +442,12 @@ def fetch_deep_stock_fundamentals(symbol_query):
         cf = stock.cashflow
         bs = stock.balance_sheet
         
-        current_price = float(hist['Close'].iloc[-1])
+        # FIXED: Drop any NaN rows from Yahoo Finance before grabbing the last price
+        close_series = hist['Close'].dropna()
+        if close_series.empty:
+            return None
+        current_price = float(close_series.iloc[-1])
+        
         mcap_cr = round(info.get('marketCap', 0) / 10000000, 2)
         if mcap_cr <= 0:
             shares = info.get('sharesOutstanding', 10000000)
@@ -459,21 +474,34 @@ def fetch_deep_stock_fundamentals(symbol_query):
                 years = len(pat_series) - 1
                 pat_cagr = round((((pat_series.iloc[0] / pat_series.iloc[-1]) ** (1 / years)) - 1) * 100, 2)
 
-        roe = round(info.get('returnOnEquity', 0) * 100, 2) if info.get('returnOnEquity') else None
-        opm = round(info.get('operatingMargins', 0) * 100, 2) if info.get('operatingMargins') else None
-        roce = round(info.get('returnOnAssets', 0) * 100 * 1.5, 2) if info.get('returnOnAssets') else None 
+        # FIXED: Added pd.isna() checks to handle raw math 'nan' returns from the API
+        roe_raw = info.get('returnOnEquity')
+        roe = round(roe_raw * 100, 2) if roe_raw is not None and not pd.isna(roe_raw) else None
+        
+        opm_raw = info.get('operatingMargins')
+        opm = round(opm_raw * 100, 2) if opm_raw is not None and not pd.isna(opm_raw) else None
+        
+        roce_raw = info.get('returnOnAssets')
+        roce = round(roce_raw * 100 * 1.5, 2) if roce_raw is not None and not pd.isna(roce_raw) else None 
 
         ocf, capex, fcf, cash_conversion = 0.0, 0.0, None, None
         if not cf.empty:
-            if 'Operating Cash Flow' in cf.index: ocf = float(cf.loc['Operating Cash Flow'].iloc[0])
-            if 'Capital Expenditure' in cf.index: capex = abs(float(cf.loc['Capital Expenditure'].iloc[0]))
+            if 'Operating Cash Flow' in cf.index: 
+                ocf_series = cf.loc['Operating Cash Flow'].dropna()
+                ocf = float(ocf_series.iloc[0]) if not ocf_series.empty else 0.0
+            if 'Capital Expenditure' in cf.index: 
+                capex_series = cf.loc['Capital Expenditure'].dropna()
+                capex = abs(float(capex_series.iloc[0])) if not capex_series.empty else 0.0
             fcf = round((ocf - capex) / 10000000, 2) if ocf != 0 else None
             
         if not fin.empty and 'Net Income' in fin.index and ocf != 0:
-            net_income_curr = float(fin.loc['Net Income'].iloc[0])
+            net_income_series = fin.loc['Net Income'].dropna()
+            net_income_curr = float(net_income_series.iloc[0]) if not net_income_series.empty else 0.0
             if net_income_curr > 0: cash_conversion = round(ocf / net_income_curr, 2)
 
-        de_val = round(info.get('debtToEquity', 0) / 100, 2) if info.get('debtToEquity') is not None else None
+        de_raw = info.get('debtToEquity')
+        de_val = round(de_raw / 100, 2) if de_raw is not None and not pd.isna(de_raw) else None
+        
         current_ratio = round(info.get('currentRatio', 0), 2) if info.get('currentRatio') else None
 
         pe_ratio = round(info.get('trailingPE', 0), 2) if info.get('trailingPE') else None
@@ -506,7 +534,8 @@ def fetch_deep_stock_fundamentals(symbol_query):
             "peg_ratio": peg_ratio, "ev_ebitda": ev_ebitda, "promoter_holding": insider_ownership,
             "f_score": f_score, "beta": beta
         }
-    except Exception:
+    except Exception as e:
+        print(f"Error in deep fundamental analysis: {e}")
         return None
 
 def run_four_agent_deep_audit(f_data):
@@ -525,7 +554,6 @@ def run_four_agent_deep_audit(f_data):
     6. Score: Piotroski: {f_data['f_score']}/9
     """
 
-    # FIXED: Re-engineered final verdict prompt to force a binary CLEAR PASS or CLEAR FAIL outcome
     master_prompt = f"""
     You are an elite Institutional Investment Committee evaluating an Indian equity.
     {audit_context}
@@ -546,8 +574,9 @@ def run_four_agent_deep_audit(f_data):
 
     ### FINAL COMMITTEE JUDGE VERDICT
     - Final Verdict: You MUST evaluate all points and state either **CLEAR PASS** or **CLEAR FAIL**. Do not use "Watchlist" or "Hold". It must be a strict binary decision.
+    - Final Action: Declare **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**.
     - Final Score: X/10 against the 10-Point Checklist.
-    - Justification: Briefly explain the definitive reason for the Pass or Fail.
+    - Data-Driven Justification: Briefly explain the definitive reason for the Pass or Fail, explicitly citing the specific metrics provided above (e.g. ROE, P/E, Cash Conversion, etc.)
     """
 
     for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
