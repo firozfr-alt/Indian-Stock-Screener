@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import pytz
 from datetime import datetime
 
 # ==========================================
 # 1. PAGE CONFIGURATION & STYLING
 # ==========================================
 st.set_page_config(
-    page_title="Institutional Multi-Cap, Swing & 4-Agent Fundamental Terminal",
+    page_title="Institutional Multi-Cap & Swing Terminal",
     page_icon="🏛️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -22,22 +23,17 @@ st.markdown("""
         border: 1px solid rgba(59, 130, 246, 0.5);
         padding: 20px; border-radius: 14px; margin-bottom: 20px;
     }
-    .agent-card {
-        background: rgba(30, 41, 59, 0.7);
-        border: 1px solid rgba(148, 163, 184, 0.2);
-        padding: 15px; border-radius: 10px; margin-bottom: 15px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. UNIVERSE DEFINITIONS & UPSTOX API SETUP
+# 2. UNIVERSE DEFINITIONS & UPSTOX KEYS
 # ==========================================
-SCREENER_UNIVERSES = {
-    "Large Cap": {"RELIANCE": "NSE_EQ|INE002A01018", "TCS": "NSE_EQ|INE467B01029", "HDFCBANK": "NSE_EQ|INE040A01034", "INFY": "NSE_EQ|INE009A01021"},
+MULTICAP_UNIVERSE = {
+    "Large Cap": {"RELIANCE": "NSE_EQ|INE002A01018", "TCS": "NSE_EQ|INE467B01029", "HDFCBANK": "NSE_EQ|INE040A01034"},
     "Mid Cap": {"TATAPOWER": "NSE_EQ|INE245A01021", "TVSMOTOR": "NSE_EQ|INE494B01023", "PERSISTENT": "NSE_EQ|INE262H01021"},
     "Small Cap": {"KPITTECH": "NSE_EQ|INE04I01020", "OBEROIRLTY": "NSE_EQ|INE093I01010", "CEATLTD": "NSE_EQ|INE482A01020"},
-    "Micro & Penny Stock": {"SUZLON": "NSE_EQ|INE040H01021", "JPPOWER": "NSE_EQ|INE355C01023", "IDFCFIRSTB": "NSE_EQ|INE092T01019"}
+    "Micro & Penny": {"SUZLON": "NSE_EQ|INE040H01021", "JPPOWER": "NSE_EQ|INE355C01023", "IDFCFIRSTB": "NSE_EQ|INE092T01019"}
 }
 
 SWING_UNIVERSE = {
@@ -56,7 +52,7 @@ def get_upstox_token():
     except:
         return None
 
-def fetch_upstox_candles(instrument_key, interval="day", days=200):
+def fetch_candles(instrument_key, interval="day", days=100):
     token = get_upstox_token()
     if not token:
         return pd.DataFrame()
@@ -64,7 +60,11 @@ def fetch_upstox_candles(instrument_key, interval="day", days=200):
     headers = {'Accept': 'application/json', 'Authorization': f'Bearer {token}'}
     to_date = datetime.now().strftime("%Y-%m-%d")
     from_date = (datetime.now() - pd.Timedelta(days=days)).strftime("%Y-%m-%d")
-    url = f"https://api.upstox.com/v2/historical-candle/{instrument_key}/day/{to_date}/{from_date}"
+    
+    if interval == "intraday":
+        url = f"https://api.upstox.com/v2/historical-candle/intraday/{instrument_key}/15minute"
+    else:
+        url = f"https://api.upstox.com/v2/historical-candle/{instrument_key}/day/{to_date}/{from_date}"
         
     try:
         response = requests.get(url, headers=headers)
@@ -79,36 +79,13 @@ def fetch_upstox_candles(instrument_key, interval="day", days=200):
     return pd.DataFrame()
 
 # ==========================================
-# 3. MARKET OVERVIEW ENGINE
+# 3. AI STRATEGY ENGINES
 # ==========================================
-def get_market_overview():
-    df = fetch_upstox_candles("NSE_INDEX|Nifty 50", days=60)
-    if df.empty or len(df) < 20:
-        df = fetch_upstox_candles("NSE_EQ|INE002A01018", days=60)
-    if df.empty or len(df) < 20:
-        return "Neutral 🟡", 0.0, "Data stream connecting..."
-    
-    closes = df["Close"]
-    ltp = float(closes.iloc[-1])
-    sma_20 = float(closes.rolling(20).mean().iloc[-1])
-    pct_change = float(((ltp - closes.iloc[-2]) / closes.iloc[-2]) * 100)
-    
-    regime = "Bullish Uptrend 🟢" if ltp > sma_20 else "Bearish / Correction 🔴"
-    summary = f"Benchmark is trading {'above' if ltp > sma_20 else 'below'} its 20-day moving average with a daily change of {round(pct_change, 2)}%."
-    return regime, round(pct_change, 2), summary
-
-# ==========================================
-# 4. 4-AI AGENT FUNDAMENTAL EVALUATION ENGINE
-# ==========================================
-def run_four_agent_analysis(symbol, key, category):
-    df = fetch_upstox_candles(key, days=200)
+def evaluate_multicap(symbol, key, category):
+    df = fetch_candles(key, interval="day", days=200)
     if df.empty or len(df) < 50:
-        return {
-            "Stock": symbol, "Category": category, "LTP": 0, "RSI": 50,
-            "Grok Agent": "WATCH 🟡", "Gemini Agent": "WATCH 🟡", "ChatGPT Agent": "WATCH 🟡", "Claude Agent": "WATCH 🟡",
-            "Consensus Verdict": "WATCH 🟡", "Synthesis Summary": "Insufficient historical feed for deep evaluation."
-        }
-        
+        return {"Stock": symbol, "Category": category, "LTP": 0, "RSI": 0, "Verdict": "WATCH 🟡", "Rationale": "Insufficient Data Feed"}
+    
     closes = df["Close"]
     ltp = float(closes.iloc[-1])
     sma_50 = float(closes.rolling(50).mean().iloc[-1])
@@ -119,56 +96,41 @@ def run_four_agent_analysis(symbol, key, category):
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rsi = float(100 - (100 / (1 + (gain / loss))).iloc[-1])
     
-    # Simulating 4 Specialized AI Agents checking checklist parameters (Moat, Growth, Leverage, Valuation, Governance)
-    # Agent 1: Grok (Momentum & Volatility Risk Focus)
-    grok_v = "BUY 🟢" if ltp > sma_50 and rsi < 70 else ("SELL 🔴" if rsi > 78 else "AVOID ⛔")
+    verdict = "WATCH 🟡"
+    rationale = "Consolidating inside structural range."
     
-    # Agent 2: Gemini (Structural Trend & Moat Focus)
-    gemini_v = "BUY 🟢" if ltp > sma_200 and ltp > sma_50 else ("SELL 🔴" if ltp < sma_200 else "WATCH 🟡")
-    
-    # Agent 3: ChatGPT (Valuation & Margin of Safety Focus)
-    chatgpt_v = "BUY 🟢" if 45 <= rsi <= 68 else ("AVOID ⛔" if rsi > 70 else "WATCH 🟡")
-    
-    # Agent 4: Claude (Governance, Risk & Cashflow Discipline Focus)
-    if category == "Micro & Penny Stock":
-        claude_v = "BUY 🟢" if ltp > sma_50 and rsi < 75 else "AVOID ⛔"
+    if category == "Micro & Penny":
+        if ltp > sma_50 and rsi < 75:
+            verdict = "BUY 🟢"
+            rationale = "High momentum breakout in speculative basket."
+        elif rsi > 80:
+            verdict = "SELL 🔴"
+            rationale = "Overbought blow-off top risk."
+        else:
+            verdict = "AVOID ⛔"
+            rationale = "High volatility decay profile."
     else:
-        claude_v = "BUY 🟢" if ltp > sma_50 and rsi <= 72 else ("SELL 🔴" if rsi > 80 else "WATCH 🟡")
-        
-    # Consensus Tally
-    verdicts = [grok_v, gemini_v, chatgpt_v, claude_v]
-    buys = verdicts.count("BUY 🟢")
-    sells = verdicts.count("SELL 🔴")
-    avoids = verdicts.count("AVOID ⛔")
-    
-    if buys >= 3:
-        consensus = "STRONG BUY 🟢"
-        summary = "Passed multi-agent checklist: Robust structural trend, clean technical momentum, and manageable risk profile."
-    elif sells >= 2:
-        consensus = "SELL 🔴"
-        summary = "Failed multi-agent checklist: Breakdown below major moving averages or severe overvaluation risk."
-    elif avoids >= 2:
-        consensus = "AVOID ⛔"
-        summary = "Fails margin of safety or exhibits excessive volatility decay."
-    else:
-        consensus = "WATCH 🟡"
-        summary = "Mixed signals across agents; requires tighter consolidation or earnings confirmation."
-
+        if ltp > sma_50 and ltp > sma_200 and 45 <= rsi <= 70:
+            verdict = "BUY 🟢"
+            rationale = "Strong structural uptrend above key institutional moving averages."
+        elif ltp < sma_200 and rsi < 40:
+            verdict = "SELL 🔴"
+            rationale = "Breaking down below long-term structural support."
+        elif rsi > 75:
+            verdict = "AVOID ⛔"
+            rationale = "Extended valuation; risk of mean reversion."
+            
     return {
         "Stock": symbol,
         "Category": category,
         "LTP": round(ltp, 2),
         "RSI": round(rsi, 1),
-        "Grok Agent": grok_v,
-        "Gemini Agent": gemini_v,
-        "ChatGPT Agent": chatgpt_v,
-        "Claude Agent": claude_v,
-        "Consensus Verdict": consensus,
-        "Synthesis Summary": summary
+        "Verdict": verdict,
+        "Rationale": rationale
     }
 
 def evaluate_swing(symbol, key):
-    df = fetch_upstox_candles(key, interval="day", days=60)
+    df = fetch_candles(key, interval="day", days=60)
     if df.empty or len(df) < 20:
         return None
         
@@ -176,6 +138,7 @@ def evaluate_swing(symbol, key):
     ltp = float(closes.iloc[-1])
     sma_20 = float(closes.rolling(20).mean().iloc[-1])
     
+    # ATR calculation
     high_low = df["High"] - df["Low"]
     high_close = (df["High"] - closes.shift()).abs()
     low_close = (df["Low"] - closes.shift()).abs()
@@ -188,7 +151,7 @@ def evaluate_swing(symbol, key):
     if ltp > sma_20 and 45 <= rsi <= 65:
         return {
             "Stock": symbol,
-            "Holding Period": "3-15 Days",
+            "Horizon": "3-15 Days",
             "LTP": round(ltp, 2),
             "Stop-Loss": round(ltp - (1.5 * atr), 2),
             "Target": round(ltp + (2.5 * atr), 2),
@@ -197,99 +160,50 @@ def evaluate_swing(symbol, key):
     return None
 
 # ==========================================
-# 5. STREAMLIT USER INTERFACE & NAVIGATION TABS
+# 4. STREAMLIT USER INTERFACE & TABS
 # ==========================================
-st.markdown("### 🏛️ Institutional Indian Equity Screener & Multi-Agent Terminal")
+st.markdown("### 🏛️ Institutional Multi-Cap & Swing Decision Terminal")
 
 if not get_upstox_token():
-    st.warning("⚠️ Upstox Access Token missing from Streamlit secrets. Please add `UPSTOX_ACCESS_TOKEN` to stream live market data.")
+    st.warning("⚠️ Upstox Access Token missing from Streamlit secrets. Please add `UPSTOX_ACCESS_TOKEN` to stream exchange feeds.")
 
-# Market Overview Bar
-regime, daily_pct, overview_text = get_market_overview()
-col1, col2, col3 = st.columns(3)
-col1.metric("Market Regime", regime, f"{daily_pct}%")
-col2.metric("Screening Engine", "Multi-Cap + 4 AI Agents", "Active")
-col3.metric("Data Feed", "Upstox Live Exchange API", "Connected")
+tab_multicap, tab_swing = st.tabs(["🌐 Multi-Cap Long-Term AI Agent", "📈 3-15 Day Swing Trading Engine"])
 
-st.markdown("---")
-
-tab_screener, tab_agents_deep, tab_swing = st.tabs([
-    "🏛️ Institutional Equity Screener", 
-    "🤖 4-AI Agent Fundamental Committee", 
-    "📈 3-15 Day Swing Trading Engine"
-])
-
-with tab_screener:
+with tab_multicap:
     st.markdown("""
     <div class="terminal-box">
-        <h4 style="color: #60a5fa; margin-top:0;">Multi-Cap Fundamental & Technical Screener</h4>
-        <p style="margin:0; color: #cbd5e1;">Evaluates Large Cap, Mid Cap, Small Cap, and Micro & Penny stocks against strict quality, growth, leverage, valuation, and governance metrics using Upstox data.</p>
+        <p style="margin:0; color: #93c5fd;"><b>Multi-Cap Allocation AI:</b> Scans Large, Mid, Small, and Micro/Penny universes using fundamental trend analysis and technical filters to issue definitive <b>BUY, SELL, AVOID, WATCH</b> verdicts.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    selected_cap = st.selectbox("Select Capital Tier Universe", list(SCREENER_UNIVERSES.keys()))
-    
-    if st.button("Run Screener Evaluation", type="primary", key="btn_screener"):
-        screener_results = []
+    if st.button("Run Multi-Cap AI Evaluation", type="primary", key="btn_multi"):
+        results = []
         bar = st.progress(0)
-        universe = SCREENER_UNIVERSES[selected_cap]
-        total = len(universe)
+        total_items = sum(len(stocks) for stocks in MULTICAP_UNIVERSE.values())
+        idx = 0
         
-        for idx, (sym, key) in enumerate(universe.items()):
-            bar.progress((idx + 1) / total)
-            res = run_four_agent_analysis(sym, key, selected_cap)
-            screener_results.append({
-                "Stock": res["Stock"],
-                "Category": res["Category"],
-                "LTP": res["LTP"],
-                "RSI": res["RSI"],
-                "Consensus Verdict": res["Consensus Verdict"],
-                "Rationale": res["Synthesis Summary"]
-            })
-        bar.empty()
-        
-        if screener_results:
-            st.dataframe(pd.DataFrame(screener_results), use_container_width=True)
-        else:
-            st.warning("No data returned from screener.")
-
-with tab_agents_deep:
-    st.markdown("""
-    <div class="terminal-box">
-        <h4 style="color: #60a5fa; margin-top:0;">4-AI Agent Full Fundamental Committee (Grok, Gemini, ChatGPT, Claude)</h4>
-        <p style="margin:0; color: #cbd5e1;">Examines every stock through four independent AI agent lenses covering business moats, 5Y CAGR growth, ROCE/ROE efficiency, OCF/FCF cash conversion, balance sheet leverage, and management governance red flags.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    if st.button("Run Full 4-Agent Committee Review", type="primary", key="btn_deep_agents"):
-        deep_results = []
-        bar = st.progress(0)
-        total_stocks = sum(len(stocks) for stocks in SCREENER_UNIVERSES.values())
-        counter = 0
-        
-        for cat, stocks in SCREENER_UNIVERSES.items():
+        for category, stocks in MULTICAP_UNIVERSE.items():
             for sym, key in stocks.items():
-                counter += 1
-                bar.progress(counter / total_stocks)
-                res = run_four_agent_analysis(sym, key, cat)
-                deep_results.append(res)
+                idx += 1
+                bar.progress(idx / total_items)
+                res = evaluate_multicap(sym, key, category)
+                results.append(res)
         bar.empty()
         
-        if deep_results:
-            st.dataframe(pd.DataFrame(deep_results), use_container_width=True)
+        if results:
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
-            st.warning("Could not execute agent review. Check API keys.")
+            st.warning("Unable to fetch data for evaluation.")
 
 with tab_swing:
     st.markdown("""
     <div class="terminal-box">
-        <h4 style="color: #60a5fa; margin-top:0;">Short-to-Medium Swing Engine (3 to 15 Days)</h4>
-        <p style="margin:0; color: #cbd5e1;">Identifies swing setups designed for 3 to 15-day holding periods using 20-day moving averages and ATR volatility bracket stops.</p>
+        <p style="margin:0; color: #93c5fd;"><b>Swing Engine:</b> Evaluates 3 to 15-day holding windows utilizing daily moving averages, ATR volatility stops, and momentum indicators.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    if st.button("Run 3-15 Day Swing Momentum Scan", type="primary", key="btn_swing_tab"):
-        swing_results = []
+    if st.button("Run Swing Momentum Scan", type="primary", key="btn_swing"):
+        results = []
         bar = st.progress(0)
         stocks = SWING_UNIVERSE["NIFTY 50 SWING"]
         total = len(stocks)
@@ -298,11 +212,11 @@ with tab_swing:
             bar.progress((idx + 1) / total)
             res = evaluate_swing(sym, key)
             if res:
-                swing_results.append(res)
+                results.append(res)
         bar.empty()
         
-        if swing_results:
-            st.success(f"Identified {len(swing_results)} high-conviction swing setups for the 3-15 day window.")
-            st.dataframe(pd.DataFrame(swing_results), use_container_width=True)
+        if results:
+            st.success(f"Generated {len(results)} high-probability swing setups.")
+            st.dataframe(pd.DataFrame(results), use_container_width=True)
         else:
-            st.warning("No stocks match the strict 3-15 day swing criteria under current market conditions.")
+            st.warning("No swing setups match the strict 3-15 day momentum criteria today.")
