@@ -1,7 +1,6 @@
 streamlit
 pandas
 numpy
-requests
-pytz
-google-generativeai
-google-api-core
+yfinance
+google-genai
+fpdf
