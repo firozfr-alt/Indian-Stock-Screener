@@ -7,9 +7,6 @@ import time
 from datetime import datetime
 from fpdf import FPDF
 import concurrent.futures
-import requests
-from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 
 st.set_page_config(
     page_title="AI Equity Screener & Fundamental Analyst",
@@ -104,7 +101,7 @@ def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
     Keep it highly professional, analytical, and direct.
     """
     
-    models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash"]
     for model_name in models_to_try:
         for attempt in range(3):
             try:
@@ -114,7 +111,7 @@ def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
             except Exception as api_e:
                 error_str = str(api_e).lower()
                 if "503" in error_str or "unavailable" in error_str or "429" in error_str or "quota" in error_str:
-                    time.sleep(5)
+                    time.sleep(2)
                     continue
                 else:
                     break
@@ -170,7 +167,7 @@ PENNY_MICRO_THEMES = {
 }
 
 # =========================================================
-# 4. DETERMINISTIC QUANT ENGINE
+# 4. DETERMINISTIC QUANT ENGINE (TABS 1-3)
 # =========================================================
 @st.cache_data(ttl=1800)
 def analyze_stock(ticker, theme, strategy_type="core"):
@@ -323,13 +320,13 @@ def fetch_dossier_parallel(candidate, strategy):
     - Recommended Holding Period: State the estimated optimal holding timeframe (e.g., 6-12 months, 1-3 years, 5+ years) to realize value, and provide a 1-sentence rationale.
     """
     
-    for model_name in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
+    for model_name in ["gemini-1.5-flash", "gemini-2.0-flash"]:
         for attempt in range(3):
             try:
                 response = ai_client.models.generate_content(model=model_name, contents=prompt)
                 return sym, response.text.strip() if response.text else "Generation failed."
             except Exception as e:
-                if "429" in str(e) or "503" in str(e): time.sleep(5)
+                if "429" in str(e) or "503" in str(e): time.sleep(2)
                 else: break
     return sym, "API rate limits reached. Try again shortly."
 
@@ -389,70 +386,136 @@ def build_pdf_report(candidate_list, dossier_dict, report_title="Report"):
 
 
 # =========================================================
-# 6. MULTIBAGGER & SMART MONEY DATA ENGINES
+# 6. NEW MULTIBAGGER TECHNICAL/FUNDAMENTAL ENGINE
 # =========================================================
-@st.cache_data(ttl=3600)
-def get_chartink_momentum_stocks():
-    """Scrapes Chartink for stocks meeting technical momentum criteria."""
-    url = 'https://chartink.com/screener/process'
-    condition = {"scan_clause": "( {33489} ( latest close > latest sma ( close,50 ) and latest sma ( close,50 ) > latest sma ( close,200 ) and latest rsi ( 14 ) > 60 ) )"}
-    
-    try:
-        with requests.Session() as s:
-            r = s.get('https://chartink.com/screener')
-            soup = BeautifulSoup(r.text, 'html.parser')
-            csrf_token = soup.select_one('meta[name="csrf-token"]')['content']
-            
-            headers = {'X-CSRF-TOKEN': csrf_token}
-            response = s.post(url, data=condition, headers=headers)
-            
-            if response.status_code == 200:
-                data = response.json()
-                df = pd.DataFrame(data['data'])
-                return df['nsecode'].tolist() if not df.empty else []
-    except Exception as e:
-        st.error(f"Error fetching Chartink data: {e}")
-    return []
-
-def get_stock_news(ticker):
-    """Fetches the top 5 recent news headlines for a given NSE ticker using DuckDuckGo."""
-    query = f"{ticker} NSE stock news today"
-    news_items = []
-    try:
-        with DDGS() as ddgs:
-            results = ddgs.news(query, max_results=5)
-            for r in results:
-                news_items.append(r['title'])
-        time.sleep(1) # Rate limit protection
-    except Exception as e:
-        pass
-    return news_items
-
-def score_stock_catalysts(ticker, news_headlines):
-    """Uses Gemini API to evaluate news sentiment and score from 1-10."""
-    if not ai_client:
-        return "Score: 0\nReasoning: Gemini API key required."
-        
-    news_context = "\n".join([f"- {news}" for news in news_headlines])
-    prompt = f"""
-    You are an institutional Indian equity analyst. 
-    Evaluate the following recent news headlines for NSE stock: {ticker}.
-    
-    Task:
-    1. Identify any immediate fundamental catalysts (e.g., earnings beats, government contracts, capacity expansion).
-    2. Assign a Momentum & Catalyst Score from 1 to 10 (10 being highly bullish).
-    
-    Provide the response strictly in this format:
-    Score: [1-10]
-    Reasoning: [1-2 short sentences summarizing the catalyst]
+@st.cache_data(ttl=1800)
+def evaluate_stock_technicals_and_pattern(ticker):
     """
-    
+    Computes fundamentals, technical momentum, and classifies Breakout vs Pullback
+    using direct yfinance price series natively.
+    """
     try:
-        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
-        return response.text if response.text else "Score: 0\nReasoning: Empty response."
-    except Exception as e:
-        return f"Score: 0\nReasoning: API Error {e}"
+        clean_ticker = ticker.replace('.NS', '').replace('.BO', '')
+        stock = yf.Ticker(f"{clean_ticker}.NS")
+        hist = stock.history(period="1y")
+        if hist.empty or len(hist) < 50:
+            return None
+        
+        close = hist['Close'].dropna()
+        volume = hist['Volume'].dropna()
+        current_price = float(close.iloc[-1])
+        high_52w = float(close.max())
+        avg_vol_20 = float(volume.tail(20).mean())
+        latest_vol = float(volume.iloc[-1])
+        vol_surge = round(latest_vol / avg_vol_20, 2) if avg_vol_20 > 0 else 1.0
 
+        # Moving Averages
+        sma_20 = float(close.rolling(20).mean().iloc[-1])
+        sma_50 = float(close.rolling(50).mean().iloc[-1])
+        sma_200 = float(close.rolling(min(200, len(close))).mean().iloc[-1])
+
+        # RSI (14) Calculation natively in Pandas
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss
+        rsi = float(100 - (100 / (1 + rs)).iloc[-1])
+
+        # Fundamental Metrics
+        info = stock.info or {}
+        market_cap_cr = round(info.get('marketCap', 0) / 10000000, 2)
+        if market_cap_cr <= 0:
+            market_cap_cr = round((current_price * info.get('sharesOutstanding', 10000000)) / 10000000, 2)
+        
+        roe = round(info.get('returnOnEquity', 0.12) * 100, 2) if info.get('returnOnEquity') else 12.0
+        de_ratio = round(info.get('debtToEquity', 30.0) / 100, 2) if info.get('debtToEquity') else 0.30
+        pe_ratio = round(info.get('trailingPE', 25.0), 2) if info.get('trailingPE') else 25.0
+
+        # Pattern Classification
+        pct_from_52w_high = ((current_price - high_52w) / high_52w) * 100
+        pct_from_sma50 = ((current_price - sma_50) / sma_50) * 100
+
+        if pct_from_52w_high >= -3.0 and vol_surge >= 1.2:
+            setup_pattern = "🚀 52W High Breakout"
+        elif -2.0 <= pct_from_sma50 <= 3.5 and current_price > sma_200 and rsi >= 45:
+            setup_pattern = "🎯 Key Support Pullback"
+        elif current_price > sma_50 and sma_50 > sma_200 and rsi > 60:
+            setup_pattern = "⚡ Trend Momentum Continuation"
+        else:
+            setup_pattern = "🔄 Range Consolidation"
+
+        # Multibagger Fundamental Filter Check
+        passes_multibagger_core = (roe >= 14.0) and (de_ratio <= 0.8) and (market_cap_cr >= 800)
+
+        return {
+            "Symbol": clean_ticker,
+            "Price": round(current_price, 2),
+            "Market Cap (Cr)": market_cap_cr,
+            "P/E": pe_ratio,
+            "ROE (%)": roe,
+            "Debt/Equity": de_ratio,
+            "RSI(14)": round(rsi, 2),
+            "SMA 50": round(sma_50, 2),
+            "SMA 200": round(sma_200, 2),
+            "Vol Ratio": f"{vol_surge}x",
+            "Setup Pattern": setup_pattern,
+            "Multibagger Base": "Pass" if passes_multibagger_core else "Watch",
+            "52W High": round(high_52w, 2)
+        }
+    except Exception:
+        return None
+
+def generate_ai_multibagger_verdict(stock_data):
+    """Generates strict BUY/SELL/AVOID/WATCH verdict using technical and fundamental parameters."""
+    sym = stock_data["Symbol"]
+    pattern = stock_data["Setup Pattern"]
+    
+    # Deterministic fallback when API quotas are hit
+    if "Breakout" in pattern and stock_data["ROE (%)"] >= 15 and stock_data["Debt/Equity"] <= 0.5:
+        deterministic_verdict = "**[BUY]**\n- Setup: High momentum breakout on low debt & strong capital returns.\n- Target Horizon: 1-2 years."
+    elif "Pullback" in pattern and stock_data["Debt/Equity"] <= 0.6:
+        deterministic_verdict = "**[BUY]** (Accumulate on Dips)\n- Setup: Healthy pullback to primary 50 SMA support.\n- Target Horizon: 6-12 months."
+    elif stock_data["Debt/Equity"] > 1.0:
+        deterministic_verdict = "**[AVOID]**\n- Setup: Excessive leverage reduces risk-adjusted margin of safety.\n- Target Horizon: None."
+    else:
+        deterministic_verdict = "**[WATCH]**\n- Setup: Wait for confirmed volume expansion or support test.\n- Target Horizon: Review quarterly."
+
+    if not ai_client:
+        return deterministic_verdict
+
+    prompt = f"""
+    You are an institutional Indian equity portfolio committee.
+    Evaluate NSE Stock: {sym}
+    Quantitative Fundamentals:
+    - Market Cap: INR {stock_data['Market Cap (Cr)']} Cr
+    - P/E: {stock_data['P/E']}
+    - ROE: {stock_data['ROE (%)']}%
+    - Debt-to-Equity: {stock_data['Debt/Equity']}
+    
+    Technicals & Price Action:
+    - Current Price: INR {stock_data['Price']} | 52W High: INR {stock_data['52W High']}
+    - RSI (14): {stock_data['RSI(14)']}
+    - 50 SMA: INR {stock_data['SMA 50']} | 200 SMA: INR {stock_data['SMA 200']}
+    - Volume Surge: {stock_data['Vol Ratio']}
+    - Classified Setup: {pattern}
+
+    Format your response EXACTLY into these lines:
+    Verdict: **[BUY]**, **[SELL]**, **[WATCH]**, or **[AVOID]**
+    Setup Quality: [1 sentence on the Breakout/Pullback/Momentum setup alignment]
+    Holding Horizon: [Optimal holding period, e.g. 6-12 months, 1-3 years]
+    """
+
+    for model_name in ["gemini-1.5-flash", "gemini-2.0-flash"]:
+        try:
+            res = ai_client.models.generate_content(model=model_name, contents=prompt)
+            if res and res.text:
+                return res.text.strip()
+        except Exception:
+            continue
+
+    return deterministic_verdict
+
+# --- Smart Money Portfolio Data ---
 @st.cache_data(ttl=3600)
 def get_superstar_portfolio(investor_name):
     """Simulates scraping Trendlyne/BSE Shareholding patterns for top 10 Indian investors."""
@@ -525,9 +588,8 @@ def generate_superstar_notes(investor, new_buys):
     As an expert institutional equity analyst, write a brief, insightful analytical note (3-4 sentences maximum) explaining the potential fundamental rationale, sector tailwinds, or catalysts driving this smart money accumulation.
     Keep the tone highly professional and grounded.
     """
-    
     try:
-        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
+        response = ai_client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         return response.text.strip()
     except Exception as e:
         return f"Error generating notes: {e}"
@@ -603,46 +665,83 @@ with tab_penny: render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny
 
 
 # =========================================================
-# TAB 4: AI MULTIBAGGER STOCKS
+# TAB 4: AI MULTIBAGGER STOCKS (NEW TECHNICAL ENGINE)
 # =========================================================
 with tab_multibagger:
-    st.subheader("🏆 AI Multibagger Catalyst Screener")
-    st.write("Finds fundamental multibaggers breaking out technically, ranked by Gemini AI using live news catalysts.")
-    
-    if st.button("🚀 Run AI Multibagger Scan"):
-        with st.spinner("Fetching technical breakouts from Chartink..."):
-            momentum_tickers = get_chartink_momentum_stocks()
-        
-        if not momentum_tickers:
-            st.warning("No stocks met the criteria today.")
+    st.subheader("🏆 Technical & Fundamental Multibagger Screener")
+    st.caption("Screens for Breakouts, Support Pullbacks, and Trend Momentum combined with Multibagger Fundamentals.")
+
+    # You can easily add more symbols to this master watchlist
+    multibagger_watchlist = [
+        "DIXON", "KAYNES", "HAL", "BEL", "BDL", "MAZDOCK", "TRENT",
+        "IREDA", "ZENTEC", "GENUSPOWER", "MARKSANS", "ELECON", "PCBL", 
+        "KPIGREEN", "TATAPOWER", "AMBER", "SYRMA", "SUZLON"
+    ]
+
+    col_m1, col_m2 = st.columns([2, 1])
+    with col_m1:
+        pattern_filter = st.selectbox(
+            "Filter Setup Pattern:", 
+            ["All Setups", "🚀 52W High Breakout", "🎯 Key Support Pullback", "⚡ Trend Momentum Continuation"]
+        )
+    with col_m2:
+        run_multi_scan = st.button("🚀 Run Multibagger Technical Scan", use_container_width=True)
+
+    if run_multi_scan:
+        with st.spinner("Analyzing Technical Breakouts, Pullbacks & Multibagger Fundamentals..."):
+            scanned_records = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(evaluate_stock_technicals_and_pattern, sym) for sym in multibagger_watchlist]
+                for future in concurrent.futures.as_completed(futures):
+                    res = future.result()
+                    if res:
+                        scanned_records.append(res)
+
+        if not scanned_records:
+            st.error("Market data feed temporarily unavailable.")
         else:
-            target_tickers = momentum_tickers[:10] # Limit for API speed
-            results = []
-            
-            progress_bar = st.progress(0)
-            for i, ticker in enumerate(target_tickers):
-                news = get_stock_news(ticker)
-                if news:
-                    ai_analysis = score_stock_catalysts(ticker, news)
-                    try:
-                        lines = ai_analysis.strip().split('\n')
-                        score = int(lines[0].replace('Score:', '').strip())
-                        reasoning = lines[1].replace('Reasoning:', '').strip()
-                    except:
-                        score = 0
-                        reasoning = "Data parsing error."
-                        
-                    results.append({"Ticker": ticker, "AI Score": score, "Catalysts": reasoning})
-                progress_bar.progress((i + 1) / len(target_tickers))
-                
-            df = pd.DataFrame(results)
-            if not df.empty:
-                df = df.sort_values(by="AI Score", ascending=False).reset_index(drop=True)
-                st.dataframe(
-                    df, 
-                    column_config={"AI Score": st.column_config.ProgressColumn("AI Score", format="%d", min_value=0, max_value=10)},
-                    use_container_width=True
-                )
+            df_screen = pd.DataFrame(scanned_records)
+
+            if pattern_filter != "All Setups":
+                df_screen = df_screen[df_screen["Setup Pattern"] == pattern_filter]
+
+            if df_screen.empty:
+                st.warning(f"No stocks currently qualify for {pattern_filter}. Showing all setups instead.")
+                df_screen = pd.DataFrame(scanned_records)
+
+            # Sort Breakouts and high momentum stocks to the top
+            df_screen = df_screen.sort_values(by=["RSI(14)", "ROE (%)"], ascending=[False, False]).reset_index(drop=True)
+
+            st.dataframe(
+                df_screen[[
+                    "Symbol", "Price", "Setup Pattern", "RSI(14)", "Vol Ratio", 
+                    "ROE (%)", "Debt/Equity", "P/E", "Multibagger Base"
+                ]],
+                use_container_width=True
+            )
+
+            # Select Top 3-5 Setups for AI Committee Verdict
+            st.markdown("### 🤖 Institutional AI Verdict & Trade Horizons")
+            top_candidates = df_screen.head(5).to_dict("records")
+
+            verdict_map = {}
+            with st.spinner("Convening AI Committee for BUY/SELL/WATCH/AVOID verdicts..."):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as v_executor:
+                    v_futures = [v_executor.submit(generate_ai_multibagger_verdict, cand) for cand in top_candidates]
+                    for cand, future in zip(top_candidates, v_futures):
+                        verdict_map[cand["Symbol"]] = future.result()
+
+            for cand in top_candidates:
+                sym = cand["Symbol"]
+                pattern = cand["Setup Pattern"]
+                with st.expander(f"{pattern} — {sym} (Price: ₹{cand['Price']:,} | RSI: {cand['RSI(14)']})", expanded=True):
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Current Price", f"₹{cand['Price']:,.2f}")
+                    c2.metric("Setup", cand["Setup Pattern"])
+                    c3.metric("ROE / Debt-to-Equity", f"{cand['ROE (%)']}% / {cand['Debt/Equity']}")
+                    c4.metric("Volume Surge", cand["Vol Ratio"])
+
+                    st.markdown(verdict_map.get(sym, "Verdict generating..."))
 
 
 # =========================================================
