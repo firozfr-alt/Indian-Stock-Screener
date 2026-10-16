@@ -438,9 +438,6 @@ def score_stock_catalysts(ticker, news_headlines):
     You are an institutional Indian equity analyst. 
     Evaluate the following recent news headlines for NSE stock: {ticker}.
     
-    Headlines:
-    {news_context}
-    
     Task:
     1. Identify any immediate fundamental catalysts (e.g., earnings beats, government contracts, capacity expansion).
     2. Assign a Momentum & Catalyst Score from 1 to 10 (10 being highly bullish).
@@ -456,33 +453,84 @@ def score_stock_catalysts(ticker, news_headlines):
     except Exception as e:
         return f"Score: 0\nReasoning: API Error {e}"
 
+@st.cache_data(ttl=3600)
 def get_superstar_portfolio(investor_name):
-    """Simulates scraping Trendlyne/BSE Shareholding patterns for top investors."""
+    """Simulates scraping Trendlyne/BSE Shareholding patterns for top 10 Indian investors."""
     portfolios = {
         "Radhakishan Damani": [
-            {"Stock": "DMART (Avenue Supermarts)", "Sector": "Retail", "Holding Value (Cr)": "₹1,29,000+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "DMART (Avenue Supermarts)", "Sector": "Retail", "Holding Value (Cr)": "₹1,05,111+", "Change (QoQ)": "Unchanged"},
             {"Stock": "VST Industries", "Sector": "Tobacco", "Holding Value (Cr)": "₹1,800+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "3M India", "Sector": "Diversified", "Holding Value (Cr)": "₹1,200+", "Change (QoQ)": "Unchanged"}
+            {"Stock": "3M India", "Sector": "Diversified", "Holding Value (Cr)": "₹1,200+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "India Cements", "Sector": "Cement", "Holding Value (Cr)": "₹6,933+", "Change (QoQ)": "Unchanged"}
         ],
         "Rekha Jhunjhunwala": [
-            {"Stock": "Titan Company", "Sector": "Consumer Durables", "Holding Value (Cr)": "₹16,000+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "NCC", "Sector": "Construction", "Holding Value (Cr)": "₹979.64", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Fortis Healthcare", "Sector": "Healthcare", "Holding Value (Cr)": "₹1,100+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Agro Tech Foods", "Sector": "FMCG", "Holding Value (Cr)": "₹126.99", "Change (QoQ)": "+0.5% (Added)"}
+            {"Stock": "Titan Company", "Sector": "Consumer Durables", "Holding Value (Cr)": "₹21,024+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Fortis Healthcare", "Sector": "Healthcare", "Holding Value (Cr)": "₹2,265+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "NCC", "Sector": "Construction", "Holding Value (Cr)": "₹979+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Agro Tech Foods", "Sector": "FMCG", "Holding Value (Cr)": "₹126+", "Change (QoQ)": "+0.5% (Added)"}
+        ],
+        "Mukul Agrawal": [
+            {"Stock": "ESDS Software", "Sector": "IT Software", "Holding Value (Cr)": "₹1,119+", "Change (QoQ)": "Fresh Entry"},
+            {"Stock": "ASM Technologies", "Sector": "IT Services", "Holding Value (Cr)": "₹996+", "Change (QoQ)": "+1.2% (Added)"},
+            {"Stock": "Raymond", "Sector": "Textiles", "Holding Value (Cr)": "₹450+", "Change (QoQ)": "Unchanged"}
+        ],
+        "Ashish Kacholia": [
+            {"Stock": "Shaily Engineering Plastics", "Sector": "Plastics", "Holding Value (Cr)": "₹738+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Knowledge Marine & Eng", "Sector": "Shipping", "Holding Value (Cr)": "₹228+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Beta Drugs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹214+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "TechEra Engineering", "Sector": "Capital Goods", "Holding Value (Cr)": "₹18+", "Change (QoQ)": "Fresh Entry"}
         ],
         "Akash Bhanshali": [
-            {"Stock": "Gujarat Fluorochemicals", "Sector": "Chemicals", "Holding Value (Cr)": "₹2,355.30", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Laurus Labs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹1,443.57", "Change (QoQ)": "Unchanged"},
-            {"Stock": "One97 Communications (Paytm)", "Sector": "Fintech", "Holding Value (Cr)": "₹1,356.34", "Change (QoQ)": "-0.01% (Trimmed)"}
+            {"Stock": "Gujarat Fluorochemicals", "Sector": "Chemicals", "Holding Value (Cr)": "₹2,344+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Laurus Labs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹1,444+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "One97 Communications (Paytm)", "Sector": "Fintech", "Holding Value (Cr)": "₹1,356+", "Change (QoQ)": "-0.01% (Trimmed)"}
         ],
         "Vijay Kedia": [
-            {"Stock": "Atul Auto", "Sector": "Automobile", "Holding Value (Cr)": "₹250+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Om Infra", "Sector": "Infrastructure", "Holding Value (Cr)": "₹33.40", "Change (QoQ)": "Fresh Entry"},
-            {"Stock": "Eimco Elecon Ind", "Sector": "Capital Goods", "Holding Value (Cr)": "₹37.97", "Change (QoQ)": "+2.90% (Added)"},
-            {"Stock": "Neuland Labs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹120+", "Change (QoQ)": "Unchanged"}
+            {"Stock": "Atul Auto", "Sector": "Automobile", "Holding Value (Cr)": "₹245+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Om Infra", "Sector": "Infrastructure", "Holding Value (Cr)": "₹33+", "Change (QoQ)": "Fresh Entry"},
+            {"Stock": "Eimco Elecon Ind", "Sector": "Capital Goods", "Holding Value (Cr)": "₹37+", "Change (QoQ)": "+2.90% (Added)"},
+            {"Stock": "Neuland Labs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹262+", "Change (QoQ)": "Unchanged"}
+        ],
+        "Porinju V Veliyath": [
+            {"Stock": "Aurum Proptech", "Sector": "IT Services", "Holding Value (Cr)": "₹45+", "Change (QoQ)": "+0.50% (Added)"},
+            {"Stock": "Kerala Ayurveda", "Sector": "Healthcare", "Holding Value (Cr)": "₹32+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "RPSG Ventures", "Sector": "IT Services", "Holding Value (Cr)": "₹28+", "Change (QoQ)": "Unchanged"}
+        ],
+        "Dolly Khanna": [
+            {"Stock": "Chennai Petroleum (CPCL)", "Sector": "Refineries", "Holding Value (Cr)": "₹219+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Rain Industries", "Sector": "Chemicals", "Holding Value (Cr)": "₹130+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Prakash Pipes", "Sector": "Plastic Products", "Holding Value (Cr)": "₹45+", "Change (QoQ)": "Unchanged"}
+        ],
+        "Anil Kumar Goel": [
+            {"Stock": "KRBL", "Sector": "FMCG", "Holding Value (Cr)": "₹433+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "TCPL Packaging", "Sector": "Packaging", "Holding Value (Cr)": "₹369+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Dalmia Bharat Sugar", "Sector": "Sugar", "Holding Value (Cr)": "₹262+", "Change (QoQ)": "Unchanged"}
+        ],
+        "Ashish Dhawan": [
+            {"Stock": "M&M Financial Services", "Sector": "NBFC", "Holding Value (Cr)": "₹461+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "Religare Enterprises", "Sector": "NBFC", "Holding Value (Cr)": "₹393+", "Change (QoQ)": "Unchanged"},
+            {"Stock": "IIFL Finance", "Sector": "NBFC", "Holding Value (Cr)": "₹339+", "Change (QoQ)": "Unchanged"}
         ]
     }
     return pd.DataFrame(portfolios.get(investor_name, []))
+
+@st.cache_data(ttl=3600)
+def generate_superstar_notes(investor, new_buys):
+    """Generates an AI thesis note when an investor makes a fresh entry into a stock."""
+    if not ai_client: return "Gemini API key is required to generate AI notes."
+    if not new_buys: return "No fresh entries or additions detected this quarter."
+    
+    prompt = f"""
+    Top Indian investor {investor} recently made fresh investments or added stakes in the following stocks: {', '.join(new_buys)}.
+    As an expert institutional equity analyst, write a brief, insightful analytical note (3-4 sentences maximum) explaining the potential fundamental rationale, sector tailwinds, or catalysts driving this smart money accumulation.
+    Keep the tone highly professional and grounded.
+    """
+    
+    try:
+        response = ai_client.models.generate_content(model="gemini-3.5-flash", contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"Error generating notes: {e}"
 
 
 # =========================================================
@@ -596,16 +644,23 @@ with tab_multibagger:
                     use_container_width=True
                 )
 
+
 # =========================================================
 # TAB 5: SUPERSTAR SMART MONEY
 # =========================================================
 with tab_smart_money:
-    st.subheader("🐋 Whale Tracker: Superstar Investors' Latest Holdings")
-    st.write("Tracks recent block deals and quarterly shareholding increases for top Indian investors.")
+    st.subheader("🐋 Whale Tracker: Top 10 Superstar Investors' Holdings")
+    st.write("Tracks recent block deals and quarterly shareholding increases for India's biggest investors.")
+    
+    top_10_investors = [
+        "Radhakishan Damani", "Rekha Jhunjhunwala", "Mukul Agrawal", 
+        "Ashish Kacholia", "Akash Bhanshali", "Vijay Kedia", 
+        "Porinju V Veliyath", "Dolly Khanna", "Anil Kumar Goel", "Ashish Dhawan"
+    ]
     
     investor_choice = st.selectbox(
         "Select Superstar Investor:",
-        ["Vijay Kedia", "Rekha Jhunjhunwala", "Radhakishan Damani", "Akash Bhanshali"]
+        top_10_investors
     )
     
     if st.button(f"Load {investor_choice} Portfolio"):
@@ -621,3 +676,15 @@ with tab_smart_money:
                 return [''] * len(row)
                 
             st.dataframe(portfolio_df.style.apply(highlight_fresh_buys, axis=1), use_container_width=True)
+            
+            # --- AI SMART MONEY NOTES LOGIC ---
+            # Filter the dataframe for 'Fresh Entry' or strings containing '+'
+            new_buys_df = portfolio_df[portfolio_df['Change (QoQ)'].str.contains('Fresh Entry|\+', case=False, na=False, regex=True)]
+            
+            if not new_buys_df.empty:
+                new_buy_tickers = new_buys_df['Stock'].tolist()
+                st.markdown("### 🤖 AI Smart Money Notes on New Buys")
+                
+                with st.spinner(f"AI is analyzing {investor_choice}'s recent acquisitions..."):
+                    ai_notes = generate_superstar_notes(investor_choice, new_buy_tickers)
+                    st.info(ai_notes)
