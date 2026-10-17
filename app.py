@@ -101,7 +101,7 @@ def generate_ai_sentiment(price, daily_pts, daily_pct, ret_1m, ret_6m, trend):
     Keep it highly professional, analytical, and direct.
     """
     
-    models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash"]
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
     for model_name in models_to_try:
         for attempt in range(3):
             try:
@@ -320,7 +320,7 @@ def fetch_dossier_parallel(candidate, strategy):
     - Recommended Holding Period: State the estimated optimal holding timeframe (e.g., 6-12 months, 1-3 years, 5+ years) to realize value, and provide a 1-sentence rationale.
     """
     
-    for model_name in ["gemini-1.5-flash", "gemini-2.0-flash"]:
+    for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
         for attempt in range(3):
             try:
                 response = ai_client.models.generate_content(model=model_name, contents=prompt)
@@ -505,7 +505,7 @@ def generate_ai_multibagger_verdict(stock_data):
     Holding Horizon: [Optimal holding period, e.g. 6-12 months, 1-3 years]
     """
 
-    for model_name in ["gemini-1.5-flash", "gemini-2.0-flash"]:
+    for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
         try:
             res = ai_client.models.generate_content(model=model_name, contents=prompt)
             if res and res.text:
@@ -588,11 +588,18 @@ def generate_superstar_notes(investor, new_buys):
     As an expert institutional equity analyst, write a brief, insightful analytical note (3-4 sentences maximum) explaining the potential fundamental rationale, sector tailwinds, or catalysts driving this smart money accumulation.
     Keep the tone highly professional and grounded.
     """
-    try:
-        response = ai_client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-        return response.text.strip()
-    except Exception as e:
-        return f"Error generating notes: {e}"
+    
+    # FIXED: Using gemini-2.0-flash to avoid the 404 Model Not Found error
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-pro"] 
+    for model_name in models_to_try:
+        try:
+            response = ai_client.models.generate_content(model=model_name, contents=prompt)
+            if response.text:
+                return response.text.strip()
+        except Exception as e:
+            continue
+            
+    return "Error: AI models are currently overwhelmed or unavailable. Please try again later."
 
 
 # =========================================================
@@ -665,83 +672,110 @@ with tab_penny: render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny
 
 
 # =========================================================
-# TAB 4: AI MULTIBAGGER STOCKS (NEW TECHNICAL ENGINE)
+# TAB 4: AI MULTIBAGGER STOCKS (NEW DYNAMIC AI ENGINE)
 # =========================================================
 with tab_multibagger:
-    st.subheader("🏆 Technical & Fundamental Multibagger Screener")
-    st.caption("Screens for Breakouts, Support Pullbacks, and Trend Momentum combined with Multibagger Fundamentals.")
+    st.subheader("🏆 AI-Discovered Multibagger Screener")
+    st.caption("AI dynamically hunts for high-growth sectors, extracts candidates, and filters them through strict technical/fundamental checks.")
 
-    # You can easily add more symbols to this master watchlist
-    multibagger_watchlist = [
-        "DIXON", "KAYNES", "HAL", "BEL", "BDL", "MAZDOCK", "TRENT",
-        "IREDA", "ZENTEC", "GENUSPOWER", "MARKSANS", "ELECON", "PCBL", 
-        "KPIGREEN", "TATAPOWER", "AMBER", "SYRMA", "SUZLON"
-    ]
-
-    col_m1, col_m2 = st.columns([2, 1])
+    col_m1, col_m2, col_m3 = st.columns([2, 1, 1])
     with col_m1:
         pattern_filter = st.selectbox(
             "Filter Setup Pattern:", 
             ["All Setups", "🚀 52W High Breakout", "🎯 Key Support Pullback", "⚡ Trend Momentum Continuation"]
         )
     with col_m2:
-        run_multi_scan = st.button("🚀 Run Multibagger Technical Scan", use_container_width=True)
+        ai_sector_focus = st.selectbox(
+            "AI Discovery Theme:",
+            ["General High Growth", "Defense & Aerospace", "Green Energy & EV", "EMS & Semi-conductors", "Undervalued Turnarounds"]
+        )
+    with col_m3:
+        st.write("")
+        st.write("")
+        run_multi_scan = st.button("🤖 Ask AI & Scan", use_container_width=True)
 
     if run_multi_scan:
-        with st.spinner("Analyzing Technical Breakouts, Pullbacks & Multibagger Fundamentals..."):
-            scanned_records = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                futures = [executor.submit(evaluate_stock_technicals_and_pattern, sym) for sym in multibagger_watchlist]
-                for future in concurrent.futures.as_completed(futures):
-                    res = future.result()
-                    if res:
-                        scanned_records.append(res)
+        dynamic_watchlist = []
+        
+        # Step 1: Ask AI to discover stocks based on the theme
+        with st.spinner(f"AI is hunting for {ai_sector_focus} multibagger candidates..."):
+            if not ai_client:
+                st.error("Gemini API Key missing. Falling back to default list.")
+                dynamic_watchlist = ["DIXON", "KAYNES", "HAL", "IREDA", "ZENTEC", "TATAPOWER", "SUZLON"]
+            else:
+                ai_prompt = f"""
+                Act as a quantitative Indian equity screener. 
+                Identify 15 mid-cap and small-cap Indian stocks listed on the NSE that fit the theme: "{ai_sector_focus}" and have high multibagger potential based on current macro trends.
+                Return ONLY a comma-separated list of their NSE trading symbols (e.g., RELIANCE, TCS, HAL). 
+                Do not include '.NS', do not include company names, and do not add any markdown, formatting, or conversational text.
+                """
+                try:
+                    res = ai_client.models.generate_content(model="gemini-2.0-flash", contents=ai_prompt)
+                    if res and res.text:
+                        raw_symbols = res.text.strip().replace('\n', '').replace(' ', '').split(',')
+                        dynamic_watchlist = [sym.upper() for sym in raw_symbols if sym.isalpha()]
+                except Exception as e:
+                    st.warning("AI Discovery hit rate limits. Using robust backup list.")
+                    dynamic_watchlist = ["DIXON", "KAYNES", "HAL", "IREDA", "ZENTEC", "TATAPOWER", "SUZLON", "PCBL", "MARKSANS"]
 
-        if not scanned_records:
-            st.error("Market data feed temporarily unavailable.")
-        else:
-            df_screen = pd.DataFrame(scanned_records)
+        if dynamic_watchlist:
+            st.success(f"**AI Identified Candidates:** {', '.join(dynamic_watchlist)}")
+            
+            # Step 2: Run the Quantitative yfinance Scan on AI's list
+            with st.spinner("Analyzing Technical Breakouts, Pullbacks & Fundamentals on AI Watchlist..."):
+                scanned_records = []
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = [executor.submit(evaluate_stock_technicals_and_pattern, sym) for sym in set(dynamic_watchlist)]
+                    for future in concurrent.futures.as_completed(futures):
+                        res = future.result()
+                        if res:
+                            scanned_records.append(res)
 
-            if pattern_filter != "All Setups":
-                df_screen = df_screen[df_screen["Setup Pattern"] == pattern_filter]
-
-            if df_screen.empty:
-                st.warning(f"No stocks currently qualify for {pattern_filter}. Showing all setups instead.")
+            if not scanned_records:
+                st.error("Market data feed temporarily unavailable for these symbols.")
+            else:
                 df_screen = pd.DataFrame(scanned_records)
 
-            # Sort Breakouts and high momentum stocks to the top
-            df_screen = df_screen.sort_values(by=["RSI(14)", "ROE (%)"], ascending=[False, False]).reset_index(drop=True)
+                if pattern_filter != "All Setups":
+                    df_screen = df_screen[df_screen["Setup Pattern"] == pattern_filter]
 
-            st.dataframe(
-                df_screen[[
-                    "Symbol", "Price", "Setup Pattern", "RSI(14)", "Vol Ratio", 
-                    "ROE (%)", "Debt/Equity", "P/E", "Multibagger Base"
-                ]],
-                use_container_width=True
-            )
+                if df_screen.empty:
+                    st.warning(f"None of the AI candidates currently qualify for {pattern_filter}. Showing all setups instead.")
+                    df_screen = pd.DataFrame(scanned_records)
 
-            # Select Top 3-5 Setups for AI Committee Verdict
-            st.markdown("### 🤖 Institutional AI Verdict & Trade Horizons")
-            top_candidates = df_screen.head(5).to_dict("records")
+                # Sort Breakouts and high momentum stocks to the top
+                df_screen = df_screen.sort_values(by=["RSI(14)", "ROE (%)"], ascending=[False, False]).reset_index(drop=True)
 
-            verdict_map = {}
-            with st.spinner("Convening AI Committee for BUY/SELL/WATCH/AVOID verdicts..."):
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as v_executor:
-                    v_futures = [v_executor.submit(generate_ai_multibagger_verdict, cand) for cand in top_candidates]
-                    for cand, future in zip(top_candidates, v_futures):
-                        verdict_map[cand["Symbol"]] = future.result()
+                st.dataframe(
+                    df_screen[[
+                        "Symbol", "Price", "Setup Pattern", "RSI(14)", "Vol Ratio", 
+                        "ROE (%)", "Debt/Equity", "P/E", "Multibagger Base"
+                    ]],
+                    use_container_width=True
+                )
 
-            for cand in top_candidates:
-                sym = cand["Symbol"]
-                pattern = cand["Setup Pattern"]
-                with st.expander(f"{pattern} — {sym} (Price: ₹{cand['Price']:,} | RSI: {cand['RSI(14)']})", expanded=True):
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Current Price", f"₹{cand['Price']:,.2f}")
-                    c2.metric("Setup", cand["Setup Pattern"])
-                    c3.metric("ROE / Debt-to-Equity", f"{cand['ROE (%)']}% / {cand['Debt/Equity']}")
-                    c4.metric("Volume Surge", cand["Vol Ratio"])
+                # Step 3: Select Top 3-5 Setups for AI Committee Verdict
+                st.markdown("### 🤖 Institutional AI Verdict & Trade Horizons")
+                top_candidates = df_screen.head(5).to_dict("records")
 
-                    st.markdown(verdict_map.get(sym, "Verdict generating..."))
+                verdict_map = {}
+                with st.spinner("Convening AI Committee for BUY/SELL/WATCH/AVOID verdicts..."):
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as v_executor:
+                        v_futures = [v_executor.submit(generate_ai_multibagger_verdict, cand) for cand in top_candidates]
+                        for cand, future in zip(top_candidates, v_futures):
+                            verdict_map[cand["Symbol"]] = future.result()
+
+                for cand in top_candidates:
+                    sym = cand["Symbol"]
+                    pattern = cand["Setup Pattern"]
+                    with st.expander(f"{pattern} — {sym} (Price: ₹{cand['Price']:,} | RSI: {cand['RSI(14)']})", expanded=True):
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Current Price", f"₹{cand['Price']:,.2f}")
+                        c2.metric("Setup", cand["Setup Pattern"])
+                        c3.metric("ROE / Debt-to-Equity", f"{cand['ROE (%)']}% / {cand['Debt/Equity']}")
+                        c4.metric("Volume Surge", cand["Vol Ratio"])
+
+                        st.markdown(verdict_map.get(sym, "Verdict generating..."))
 
 
 # =========================================================
