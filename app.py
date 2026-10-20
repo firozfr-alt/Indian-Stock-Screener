@@ -113,22 +113,27 @@ def fetch_market_dashboard_data():
         data["top_indices"] = sector_perf[:5]
         data["worst_indices"] = sector_perf[-5:]
         
+    # --- UPDATED: Indian, Global, Govt & Quarterly Results Feeds ---
     try:
-        rss_url = "https://www.moneycontrol.com/rss/business.xml"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(rss_url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            news_items = []
-            for item in root.findall('./channel/item')[:5]:
-                title = item.find('title').text if item.find('title') is not None else "News Title Unavailable"
-                link = item.find('link').text if item.find('link') is not None else "#"
-                news_items.append({"title": title.strip(), "link": link.strip()})
-            data["news"] = news_items
-        else:
-            data["news"] = []
+        
+        def get_rss(url, limit=3):
+            try:
+                resp = requests.get(url, headers=headers, timeout=5)
+                if resp.status_code == 200:
+                    root = ET.fromstring(resp.content)
+                    return [{"title": item.find('title').text, "link": item.find('link').text} 
+                            for item in root.findall('./channel/item')[:limit]]
+            except:
+                pass
+            return []
+
+        data["news_indian"] = get_rss("https://www.moneycontrol.com/rss/business.xml", 3)
+        data["news_global"] = get_rss("https://www.moneycontrol.com/rss/internationalmarkets.xml", 3)
+        data["news_govt"] = get_rss("https://www.moneycontrol.com/rss/economy.xml", 3)
+        data["news_results"] = get_rss("https://www.moneycontrol.com/rss/results.xml", 4)
     except Exception:
-        data["news"] = []
+        pass
 
     return data
 
@@ -162,12 +167,35 @@ with st.expander("🌐 LIVE MARKET BIAS & DASHBOARD", expanded=True):
                     st.write(f"🔴 **{idx['Index']}**: {idx['Change %']:+.2f}%")
                     
         st.divider()
-        st.markdown("#### 📰 Major Market Updates & News")
-        if "news" in dash_data and dash_data["news"]:
-            for n in dash_data["news"]:
-                st.write(f"▪️ [{n['title']}]({n['link']})")
-        else:
-            st.write("News feed currently unavailable.")
+        st.markdown("#### 📰 Major Market Updates & Corporate Actions")
+        
+        col_n1, col_n2 = st.columns(2)
+        
+        with col_n1:
+            st.markdown("##### 🇮🇳 Indian Market News")
+            if "news_indian" in dash_data and dash_data["news_indian"]:
+                for n in dash_data["news_indian"]: st.markdown(f"▪️ [{n['title']}]({n['link']})")
+            else:
+                st.write("Feed unavailable.")
+                
+            st.markdown("##### 🌍 Global Market News")
+            if "news_global" in dash_data and dash_data["news_global"]:
+                for n in dash_data["news_global"]: st.markdown(f"▪️ [{n['title']}]({n['link']})")
+            else:
+                st.write("Feed unavailable.")
+
+        with col_n2:
+            st.markdown("##### 🏛️ Govt Announcements & Economy")
+            if "news_govt" in dash_data and dash_data["news_govt"]:
+                for n in dash_data["news_govt"]: st.markdown(f"▪️ [{n['title']}]({n['link']})")
+            else:
+                st.write("Feed unavailable.")
+                
+            st.markdown("##### 📅 Upcoming & Recent Quarterly Results")
+            if "news_results" in dash_data and dash_data["news_results"]:
+                for n in dash_data["news_results"]: st.markdown(f"▪️ [{n['title']}]({n['link']})")
+            else:
+                st.write("Feed unavailable.")
     else:
         st.error("Market dashboard data unavailable.")
 
