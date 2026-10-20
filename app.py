@@ -113,17 +113,33 @@ def fetch_market_dashboard_data():
         data["top_indices"] = sector_perf[:5]
         data["worst_indices"] = sector_perf[-5:]
         
-    # --- UPDATED: Indian, Global, Govt & Quarterly Results Feeds ---
+    # --- UPDATED: Indian, Global, Govt & Quarterly Results Feeds (with Deduplication & Title Extraction) ---
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         
-        def get_rss(url, limit=3):
+        def get_rss(url, limit=3, extract_company=False):
             try:
                 resp = requests.get(url, headers=headers, timeout=5)
                 if resp.status_code == 200:
                     root = ET.fromstring(resp.content)
-                    return [{"title": item.find('title').text, "link": item.find('link').text} 
-                            for item in root.findall('./channel/item')[:limit]]
+                    items = []
+                    seen = set()
+                    for item in root.findall('./channel/item'):
+                        raw_title = item.find('title').text
+                        link = item.find('link').text
+                        if raw_title and raw_title not in seen:
+                            seen.add(raw_title)
+                            title = raw_title
+                            if extract_company:
+                                # Strip out the financial metrics to leave just the company name
+                                for kw in [" Consolidated", " Standalone", " Q1", " Q2", " Q3", " Q4", " Net Sales", " profit", " earnings"]:
+                                    if kw in title:
+                                        title = title.split(kw)[0]
+                                        break
+                            items.append({"title": title.strip(), "link": link.strip()})
+                            if len(items) == limit:
+                                break
+                    return items
             except:
                 pass
             return []
@@ -131,7 +147,7 @@ def fetch_market_dashboard_data():
         data["news_indian"] = get_rss("https://www.moneycontrol.com/rss/business.xml", 3)
         data["news_global"] = get_rss("https://www.moneycontrol.com/rss/internationalmarkets.xml", 3)
         data["news_govt"] = get_rss("https://www.moneycontrol.com/rss/economy.xml", 3)
-        data["news_results"] = get_rss("https://www.moneycontrol.com/rss/results.xml", 4)
+        data["news_results"] = get_rss("https://www.moneycontrol.com/rss/results.xml", 5, extract_company=True)
     except Exception:
         pass
 
@@ -533,259 +549,4 @@ def get_superstar_portfolio(investor_name):
         "Akash Bhanshali": [
             {"Stock": "Gujarat Fluorochemicals", "Sector": "Chemicals", "Holding Value (Cr)": "₹2,344+", "Change (QoQ)": "Unchanged"},
             {"Stock": "Laurus Labs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹1,444+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "One97 Communications (Paytm)", "Sector": "Fintech", "Holding Value (Cr)": "₹1,356+", "Change (QoQ)": "-0.01% (Trimmed)"}
-        ],
-        "Vijay Kedia": [
-            {"Stock": "Atul Auto", "Sector": "Automobile", "Holding Value (Cr)": "₹245+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Om Infra", "Sector": "Infrastructure", "Holding Value (Cr)": "₹33+", "Change (QoQ)": "Fresh Entry"},
-            {"Stock": "Eimco Elecon Ind", "Sector": "Capital Goods", "Holding Value (Cr)": "₹37+", "Change (QoQ)": "+2.90% (Added)"},
-            {"Stock": "Neuland Labs", "Sector": "Pharmaceuticals", "Holding Value (Cr)": "₹262+", "Change (QoQ)": "Unchanged"}
-        ],
-        "Porinju V Veliyath": [
-            {"Stock": "Aurum Proptech", "Sector": "IT Services", "Holding Value (Cr)": "₹45+", "Change (QoQ)": "+0.50% (Added)"},
-            {"Stock": "Kerala Ayurveda", "Sector": "Healthcare", "Holding Value (Cr)": "₹32+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "RPSG Ventures", "Sector": "IT Services", "Holding Value (Cr)": "₹28+", "Change (QoQ)": "Unchanged"}
-        ],
-        "Dolly Khanna": [
-            {"Stock": "Chennai Petroleum (CPCL)", "Sector": "Refineries", "Holding Value (Cr)": "₹219+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Rain Industries", "Sector": "Chemicals", "Holding Value (Cr)": "₹130+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Prakash Pipes", "Sector": "Plastic Products", "Holding Value (Cr)": "₹45+", "Change (QoQ)": "Unchanged"}
-        ],
-        "Anil Kumar Goel": [
-            {"Stock": "KRBL", "Sector": "FMCG", "Holding Value (Cr)": "₹433+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "TCPL Packaging", "Sector": "Packaging", "Holding Value (Cr)": "₹369+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Dalmia Bharat Sugar", "Sector": "Sugar", "Holding Value (Cr)": "₹262+", "Change (QoQ)": "Unchanged"}
-        ],
-        "Ashish Dhawan": [
-            {"Stock": "M&M Financial Services", "Sector": "NBFC", "Holding Value (Cr)": "₹461+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "Religare Enterprises", "Sector": "NBFC", "Holding Value (Cr)": "₹393+", "Change (QoQ)": "Unchanged"},
-            {"Stock": "IIFL Finance", "Sector": "NBFC", "Holding Value (Cr)": "₹339+", "Change (QoQ)": "Unchanged"}
-        ]
-    }
-    return pd.DataFrame(portfolios.get(investor_name, []))
-
-def generate_superstar_notes(investor, new_buys):
-    if not ai_client: return "Gemini API key is required to generate AI notes."
-    if not new_buys: return "No fresh entries or additions detected this quarter."
-    
-    prompt = f"""
-    Top Indian investor {investor} recently made fresh investments or added stakes in: {', '.join(new_buys)}.
-    Write a brief analytical note (3-4 sentences maximum) explaining potential fundamental rationale, tailwinds, or catalysts.
-    """
-    res = generate_ai_content_safe(prompt)
-    return res if res else "AI models are currently rate limited. Please try again shortly."
-
-# =========================================================
-# 8. MAIN UI TABS & WORKFLOW
-# =========================================================
-tab_core, tab_smallcap, tab_penny, tab_auto_ai, tab_multibagger, tab_smart_money = st.tabs([
-    "🏛️ Large & Mid-Cap Core", "🚀 Small-Caps", "⚠️ Penny & Micro-Caps", "🤖 AI Auto-Screener", "🏆 AI Multibagger Stocks", "🐋 Superstar Smart Money"
-])
-
-def render_pipeline_ui(theme_dict, strategy, title, min_score_default):
-    st.subheader(title)
-    selected_theme = st.selectbox(f"Select Theme:", ["All Themes"] + list(theme_dict.keys()), key=f"sel_{strategy}")
-    min_score = st.slider("Minimum Score:", 35, 90, min_score_default, key=f"sld_{strategy}")
-
-    if st.button(f"🚀 Run Fast Pipeline", key=f"btn_{strategy}"):
-        with st.spinner("Step 1/2: Quant Scanning (Parallel Processing)..."):
-            scan_map = theme_dict if selected_theme.startswith("All") else {selected_theme: theme_dict[selected_theme]}
-            tasks = [(t, t_name, strategy) for t_name, tickers in scan_map.items() for t in tickers]
-            
-            all_cands = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [executor.submit(analyze_stock, t[0], t[1], t[2]) for t in tasks]
-                for future in concurrent.futures.as_completed(futures):
-                    res = future.result()
-                    if res: all_cands.append(res)
-
-            df = pd.DataFrame(all_cands)
-            
-        if not df.empty:
-            df_sorted = df[df["Overall Score (/100)"] >= min_score].sort_values(
-                by=["Overall Score (/100)"], ascending=False
-            ).reset_index(drop=True)
-
-            st.dataframe(df_sorted[["Symbol", "Price (₹)", "Market Cap (Cr)", "P/E", "Debt/Equity", "ROE (%)", "Overall Score (/100)", "Tier"]], use_container_width=True)
-            top_picks = df_sorted.head(4).to_dict('records')
-            
-            st.markdown(f"### 🔬 {strategy.capitalize()} Research Dossiers")
-            dossier_map = {}
-            
-            my_bar = st.progress(0, text="Generating AI Dossiers sequentially (rate limit protection)...")
-            for i, cand in enumerate(top_picks):
-                sym, content = fetch_dossier_sequential(cand, strategy)
-                dossier_map[sym] = content
-                my_bar.progress((i + 1) / len(top_picks), text=f"Generated {sym} ({i+1}/{len(top_picks)})")
-                time.sleep(3)
-            my_bar.empty()
-
-            for candidate in top_picks:
-                sym = candidate["Symbol"]
-                color = "🟢" if "TIER A" in candidate["Tier"] else ("🟡" if "TIER B" in candidate["Tier"] else "🔴")
-                
-                with st.expander(f"{color} {sym} — Quant Score: {candidate['Overall Score (/100)']}/100", expanded=True):
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Current Price", f"₹{float(candidate['Price (₹)']):,.2f}")
-                    c1.metric("Market Cap", f"₹{candidate['Market Cap (Cr)']:,} Cr")
-                    c2.metric("Debt-to-Equity", f"{candidate['Debt/Equity']}")
-                    c3.metric("ROE (%)", f"{candidate['ROE (%)']}%")
-                    c4.metric("3Y 3x Target", f"₹{float(candidate['Target 3x Price (₹)']):,.2f}")
-                    if candidate["Red Flags"]: st.error(f"🚨 Warnings: {', '.join([f[1] for f in candidate['Red Flags']])}")
-                    st.markdown(dossier_map.get(sym, "Dossier not found."))
-            
-            if dossier_map:
-                pdf = build_pdf_report(top_picks, dossier_map, f"{strategy.capitalize()} Research")
-                st.download_button("📄 Download Pipeline PDF Report", data=pdf, file_name=f"{strategy}_report.pdf", mime="application/pdf", key=f"dl_{strategy}")
-
-# RENDER TABS 1-3
-with tab_core: render_pipeline_ui(LARGE_MID_CAP_THEMES, "large/mid-cap", "Secular Growth & Market Leaders", 60)
-with tab_smallcap: render_pipeline_ui(SMALLCAP_THEMES, "smallcap", "Micro/Small-Cap Compounders", 50)
-with tab_penny: render_pipeline_ui(PENNY_MICRO_THEMES, "penny", "High-Risk Penny & Nano-Caps", 50)
-
-# =========================================================
-# TAB 4: AI AUTO-SCREENER
-# =========================================================
-with tab_auto_ai:
-    st.subheader("🤖 AI Auto-Screener (Cross Market)")
-    st.write("Autonomous cross-market scanner for Indian Equities showing momentum and strong fundamentals.")
-    
-    if st.button("🔍 Launch Deep AI Scan", type="primary"):
-        if not ai_client:
-            st.error("Gemini API Key is required for this feature.")
-        else:
-            with st.spinner("AI is analyzing broader market technicals and fundamentally sound companies..."):
-                prompt = """
-                You are a senior Indian equity quant analyst. Scan the Indian equity universe across NSE and BSE (spanning Large, Mid, Small, Micro, or Penny stocks).
-                Select 5 top stocks that currently display:
-                1. High relative momentum, technical continuation, or breakout setups.
-                2. Solid fundamental backbone (healthy ROE, sustainable leverage, operating margins).
-
-                For each of the 5 stocks, structure your response as:
-                - **Stock Name & Ticker**: (e.g. HAL - NSE)
-                - **Market Cap Category**: (e.g. Large-Cap / Micro-Cap)
-                - **Why it passed the scan**: Detail the exact technical price action reason and fundamental catalyst.
-                """
-                res = generate_ai_content_safe(prompt)
-                if res:
-                    st.markdown("### 🎯 AI Screener Results")
-                    st.markdown(res)
-                else:
-                    st.error("AI Scan failed due to API limits. Please wait 30 seconds and try again.")
-
-# =========================================================
-# TAB 5: AI MULTIBAGGER STOCKS
-# =========================================================
-with tab_multibagger:
-    st.subheader("🏆 AI-Discovered Multibagger Screener")
-    st.caption("AI dynamically hunts for high-growth sectors, extracts candidates, and filters them through strict technical/fundamental checks.")
-
-    col_m1, col_m2, col_m3 = st.columns([2, 1, 1])
-    with col_m1:
-        pattern_filter = st.selectbox(
-            "Filter Setup Pattern:", 
-            ["All Setups", "🚀 52W High Breakout", "🎯 Key Support Pullback", "⚡ Trend Momentum Continuation"]
-        )
-    with col_m2:
-        ai_sector_focus = st.selectbox(
-            "AI Discovery Theme:",
-            ["General High Growth", "Defense & Aerospace", "Green Energy & EV", "EMS & Semi-conductors", "Undervalued Turnarounds"]
-        )
-    with col_m3:
-        st.write("")
-        st.write("")
-        run_multi_scan = st.button("🤖 Ask AI & Scan", use_container_width=True)
-
-    if run_multi_scan:
-        dynamic_watchlist = []
-        with st.spinner(f"AI is hunting for {ai_sector_focus} multibagger candidates..."):
-            ai_prompt = f"""
-            Act as a quantitative Indian equity screener. 
-            Identify 12 mid-cap and small-cap Indian stocks listed on the NSE that fit the theme: "{ai_sector_focus}" and have high multibagger potential.
-            Return ONLY a comma-separated list of their NSE trading symbols (e.g. RELIANCE, TCS, HAL, KAYNES). 
-            Do not include '.NS' and no markdown text.
-            """
-            res_text = generate_ai_content_safe(ai_prompt)
-            if res_text:
-                raw_symbols = res_text.strip().replace('\n', '').replace(' ', '').split(',')
-                dynamic_watchlist = [sym.upper() for sym in raw_symbols if sym.isalpha()]
-            else:
-                dynamic_watchlist = ["DIXON", "KAYNES", "HAL", "IREDA", "ZENTEC", "TATAPOWER", "SUZLON", "PCBL"]
-
-        if dynamic_watchlist:
-            st.success(f"**Identified Candidates:** {', '.join(dynamic_watchlist)}")
-            
-            with st.spinner("Analyzing Technicals & Fundamentals..."):
-                scanned_records = []
-                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                    futures = [executor.submit(evaluate_stock_technicals_and_pattern, sym) for sym in set(dynamic_watchlist)]
-                    for future in concurrent.futures.as_completed(futures):
-                        res = future.result()
-                        if res: scanned_records.append(res)
-
-            if not scanned_records:
-                st.error("Market data feed temporarily unavailable for these symbols.")
-            else:
-                df_screen = pd.DataFrame(scanned_records)
-                if pattern_filter != "All Setups":
-                    df_screen = df_screen[df_screen["Setup Pattern"] == pattern_filter]
-
-                if df_screen.empty:
-                    st.warning(f"None of the candidates currently qualify for {pattern_filter}. Showing all setups.")
-                    df_screen = pd.DataFrame(scanned_records)
-
-                df_screen = df_screen.sort_values(by=["RSI(14)", "ROE (%)"], ascending=[False, False]).reset_index(drop=True)
-                st.dataframe(df_screen[["Symbol", "Price", "Setup Pattern", "RSI(14)", "Vol Ratio", "ROE (%)", "Debt/Equity", "P/E", "Multibagger Base"]], use_container_width=True)
-
-                st.markdown("### 🤖 Institutional AI Verdict & Trade Horizons")
-                top_candidates = df_screen.head(4).to_dict("records")
-                
-                for cand in top_candidates:
-                    sym = cand["Symbol"]
-                    pattern = cand["Setup Pattern"]
-                    verdict_text = generate_ai_multibagger_verdict(cand)
-                    with st.expander(f"{pattern} — {sym} (Price: ₹{cand['Price']:,} | RSI: {cand['RSI(14)']})", expanded=True):
-                        c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Current Price", f"₹{cand['Price']:,.2f}")
-                        c2.metric("Setup", cand["Setup Pattern"])
-                        c3.metric("ROE / Debt-to-Equity", f"{cand['ROE (%)']}% / {cand['Debt/Equity']}")
-                        c4.metric("Volume Surge", cand["Vol Ratio"])
-                        st.markdown(verdict_text)
-                    time.sleep(2)
-
-# =========================================================
-# TAB 6: SUPERSTAR SMART MONEY
-# =========================================================
-with tab_smart_money:
-    st.subheader("🐋 Whale Tracker: Top 10 Superstar Investors' Holdings")
-    st.write("Tracks recent block deals and quarterly shareholding patterns for India's biggest investors.")
-    
-    top_10_investors = [
-        "Radhakishan Damani", "Rekha Jhunjhunwala", "Mukul Agrawal", 
-        "Ashish Kacholia", "Akash Bhanshali", "Vijay Kedia", 
-        "Porinju V Veliyath", "Dolly Khanna", "Anil Kumar Goel", "Ashish Dhawan"
-    ]
-    
-    investor_choice = st.selectbox("Select Superstar Investor:", top_10_investors)
-    
-    if st.button(f"Load {investor_choice} Portfolio"):
-        with st.spinner(f"Loading filings for {investor_choice}..."):
-            portfolio_df = get_superstar_portfolio(investor_choice)
-            
-            st.markdown(f"### {investor_choice}'s Recent Buys & Top Holdings")
-            
-            def highlight_fresh_buys(row):
-                if row['Change (QoQ)'] == 'Fresh Entry' or '+' in row['Change (QoQ)']:
-                    return ['background-color: rgba(0, 255, 0, 0.15)'] * len(row)
-                return [''] * len(row)
-                
-            st.dataframe(portfolio_df.style.apply(highlight_fresh_buys, axis=1), use_container_width=True)
-            
-            new_buys_df = portfolio_df[portfolio_df['Change (QoQ)'].str.contains('Fresh Entry|\\+', case=False, na=False, regex=True)]
-            
-            if not new_buys_df.empty:
-                new_buy_tickers = new_buys_df['Stock'].tolist()
-                st.markdown("### 🤖 AI Smart Money Notes on New Buys")
-                with st.spinner(f"AI is analyzing {investor_choice}'s acquisitions..."):
-                    ai_notes = generate_superstar_notes(investor_choice, new_buy_tickers)
-                    st.info(ai_notes)
+            {"Stock": "One97 Communications (Paytm)", "Sector": "Fintech", "Holding Value (Cr)": "₹1,356+", "Change (QoQ)": "-0.01% (Trim
