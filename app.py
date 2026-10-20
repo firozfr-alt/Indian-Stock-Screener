@@ -33,10 +33,13 @@ else:
     st.sidebar.info("ℹ️ Deterministic Mode (Add GEMINI_API_KEY to Secrets)")
 
 def generate_ai_content_safe(prompt):
-    """Resilient caller using supported modern models and backoff for rate limits."""
+    """Resilient caller using the latest supported models and backoff for rate limits."""
     if not ai_client:
         return None
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash"]
+        
+    # FIXED: Updated to the newest available Gemini endpoints to prevent 404 Model Not Found errors
+    models_to_try = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash"]
+    
     for model_name in models_to_try:
         for attempt in range(3):
             try:
@@ -47,8 +50,8 @@ def generate_ai_content_safe(prompt):
                 err_str = str(e).lower()
                 if "429" in err_str or "quota" in err_str or "503" in err_str:
                     time.sleep(5)
-                elif "404" in err_str:
-                    break
+                elif "404" in err_str or "not found" in err_str:
+                    break  # Move to the next model in the list if the current one is unavailable
                 else:
                     break
     return None
@@ -113,7 +116,6 @@ def fetch_market_dashboard_data():
         data["top_indices"] = sector_perf[:5]
         data["worst_indices"] = sector_perf[-5:]
         
-    # --- UPDATED: Indian, Global, Govt & Quarterly Results Feeds (with Deduplication & Title Extraction) ---
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         
@@ -131,7 +133,6 @@ def fetch_market_dashboard_data():
                             seen.add(raw_title)
                             title = raw_title
                             if extract_company:
-                                # Strip out the financial metrics to leave just the company name
                                 for kw in [" Consolidated", " Standalone", " Q1", " Q2", " Q3", " Q4", " Net Sales", " profit", " earnings"]:
                                     if kw in title:
                                         title = title.split(kw)[0]
