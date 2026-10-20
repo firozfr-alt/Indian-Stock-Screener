@@ -93,11 +93,31 @@ def fetch_market_dashboard_data():
         data["top_indices"] = sector_perf[:5]
         data["worst_indices"] = sector_perf[-5:]
         
-    # Global & Local News (using basic yfinance news feed for major indices)
+    # Indian & Global Market News (Using Free Moneycontrol RSS Feed)
     try:
-        news_items = yf.Ticker("^NSEI").news[:3] + yf.Ticker("SPY").news[:2]
-        data["news"] = [{"title": n.get("title", ""), "link": n.get("link", "")} for n in news_items if "title" in n]
-    except Exception:
+        import xml.etree.ElementTree as ET
+        
+        # Free Moneycontrol Business & Market News RSS feed
+        rss_url = "https://www.moneycontrol.com/rss/business.xml"
+        
+        # Using a standard User-Agent header to prevent getting blocked
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(rss_url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            root = ET.fromstring(response.content)
+            news_items = []
+            
+            # Extract the top 5 latest news articles from the XML
+            for item in root.findall('./channel/item')[:5]:
+                title = item.find('title').text if item.find('title') is not None else "News Title Unavailable"
+                link = item.find('link').text if item.find('link') is not None else "#"
+                news_items.append({"title": title.strip(), "link": link.strip()})
+                
+            data["news"] = news_items
+        else:
+            data["news"] = []
+    except Exception as e:
         data["news"] = []
 
     return data
